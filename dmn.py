@@ -23,7 +23,6 @@ class DMN(BaseModel):
         fact_counts = tf.placeholder('int64', shape=[N], name='fc')
         input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
         is_training = tf.placeholder(tf.bool)
-        self.att = tf.constant(0.)
 
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
@@ -37,9 +36,8 @@ class DMN(BaseModel):
                 facts = tf.unpack(facts)
                 embed = tf.pack([tf.nn.embedding_lookup(embedding, w) for w in facts])  # [F, N, V]
                 input_embed.append(embed)
-
             # apply positional encoding
-            input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [N, F, L, V]
+            input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [L, F, N, V] -> [N, F, L, V]
             encoded = l * input_embed * input_mask
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
 
@@ -59,14 +57,14 @@ class DMN(BaseModel):
             facts = forward_states + backward_states  # [N, F, d]
 
         with tf.variable_scope('Question'):
-            ques_list = tf.unpack(tf.transpose(question))
-            ques_embed = [tf.nn.embedding_lookup(embedding, w) for w in ques_list]
-            _, question_vec = tf.nn.rnn(gru, ques_embed, dtype=tf.float32)
+            ques_list = tf.unpack(tf.transpose(question)) # Q * [N]
+            ques_embed = [tf.nn.embedding_lookup(embedding, w) for w in ques_list] # Q * [N, V]
+            _, question_vec = tf.nn.rnn(gru, ques_embed, dtype=tf.float32) # [N, d]
 
         # Episodic Memory
         with tf.variable_scope('Episodic'):
             episode = EpisodeModule(d, question_vec, facts, is_training, params.batch_norm)
-            memory = tf.identity(question_vec)
+            memory = tf.identity(question_vec) # [N, d]
 
             for t in range(params.memory_step):
                 with tf.variable_scope('Layer%d' % t) as scope:
@@ -130,11 +128,11 @@ class DMN(BaseModel):
         self.opt_op = opt_op
 
     def positional_encoding(self):
-        D, M, N = self.params.embed_size, self.params.max_sent_size, self.params.batch_size
-        encoding = np.zeros([M, D])
-        for j in range(M):
-            for d in range(D):
-                encoding[j, d] = (1 - float(j)/M) - (float(d)/D)*(1 - 2.0*j/M)
+        V, L = self.params.embed_size, self.params.max_sent_size
+        encoding = np.zeros([L, V])
+        for l in range(L):
+            for v in range(V):
+                encoding[l, v] = (1 - float(l)/L) - (float(v)/V)*(1 - 2.0*l/L)
 
         return encoding
 
