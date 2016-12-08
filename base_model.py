@@ -30,13 +30,14 @@ class BaseModel(object):
 
     def test_batch(self, sess, batch):
         feed_dict = self.get_feed_dict(batch, is_train=False)
-        return sess.run([self.num_corrects, self.total_loss, self.global_step], feed_dict=feed_dict)
+        return sess.run([self.total_loss, self.global_step], feed_dict=feed_dict)
 
     def train(self, sess, train_data, val_data):
         params = self.params
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
+        self.eval(sess, train_data, name='Training')
         print("Training %d epochs ..." % num_epochs)
         for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
             for _ in range(num_batches):
@@ -59,19 +60,16 @@ class BaseModel(object):
 
     def eval(self, sess, data, name):
         num_batches = data.num_batches
-        num_corrects = total = 0
         losses = []
         for _ in range(num_batches):
             batch = data.next_batch()
-            cur_num_corrects, cur_loss, global_step = self.test_batch(sess, batch)
-            num_corrects += cur_num_corrects
-            total += len(batch[0])
+            cur_loss, global_step = self.test_batch(sess, batch)
             losses.append(cur_loss)
         data.reset()
         loss = np.mean(losses)
 
-        print("[%s] step %d: Accuracy = %.2f%% (%d / %d), Loss = %.4f" % \
-              (name, global_step, 100 * float(num_corrects) / total, num_corrects, total, loss))
+        print("[%s] step %d, Loss = %.4f" % \
+              (name, global_step, loss))
         return loss
 
     def save(self, sess):

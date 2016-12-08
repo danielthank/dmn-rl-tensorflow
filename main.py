@@ -9,7 +9,7 @@ from data_utils import WordTable
 flags = tf.app.flags
 
 # directories
-flags.DEFINE_string('model', 'dmn+', 'Model type - dmn+ [Default: DMN+]')
+flags.DEFINE_string('model', 'Q2A', 'Model type [Q2A]')
 flags.DEFINE_boolean('test', False, 'true for testing, false for training [False]')
 flags.DEFINE_string('data_dir', 'babi', 'Data directory [babi]')
 flags.DEFINE_string('save_dir', 'save', 'Save path [save]')
@@ -28,9 +28,7 @@ flags.DEFINE_integer('save_period', 80, 'Save period [80]')
 # model params
 flags.DEFINE_integer('memory_step', 3, 'Episodic Memory steps [3]')
 flags.DEFINE_string('memory_update', 'relu', 'Episodic meory update method - relu or gru [relu]')
-# flags.DEFINE_bool('memory_tied', False, 'Share memory update weights among the layers? [False]')
-flags.DEFINE_integer('glove_size', 50, 'GloVe size - Only used in dmn [50]')
-flags.DEFINE_integer('embed_size', 80, 'Word embedding size - Used in dmn+, dmn_embed [80]')
+flags.DEFINE_integer('embed_size', 80, 'Word embedding size [80]')
 flags.DEFINE_integer('hidden_size', 80, 'Size of hidden units [80]')
 
 # train hyperparameters
@@ -44,13 +42,12 @@ flags.DEFINE_float('val_ratio', 0.1, 'Validation data ratio to training data [0.
 
 FLAGS = flags.FLAGS
 
-
 def main(_):
-    if FLAGS.model == 'dmn+':
-        words = WordTable()
-        from dmn import DMN
+    words = WordTable()
+    if FLAGS.model == 'Q2A':
+        from Q2A import DMN
     else:
-        return
+        from A2Q import DMN
 
     train = read_babi(os.path.join(FLAGS.data_dir, 'train'), FLAGS.task, 'train', FLAGS.batch_size, words)
     test = read_babi(os.path.join(FLAGS.data_dir, 'test'), FLAGS.task, 'test', FLAGS.batch_size, words)
@@ -76,7 +73,8 @@ def main(_):
             model.load(sess)
             model.eval(sess, test, name='Test')
         else:
-            if FLAGS.load: model.load(sess)
+            if FLAGS.load:
+                model.load(sess)
             model.train(sess, train, val)
 
 if __name__ == '__main__':
