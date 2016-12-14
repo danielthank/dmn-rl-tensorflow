@@ -4,7 +4,7 @@ from tensorflow.python.ops import rnn_cell
 
 from base_model import BaseModel
 from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm
+from nn import weight, bias, dropout, batch_norm, variable_summary
 
 
 class DMN(BaseModel):
@@ -27,7 +27,9 @@ class DMN(BaseModel):
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
         l = self.positional_encoding()
-        embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+        with tf.variable_scope('Embedding'):
+            embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+            variable_summary([embedding])
 
         with tf.name_scope('SentenceReader'):
             input_list = tf.unpack(tf.transpose(input))  # L x [F, N]
@@ -40,33 +42,35 @@ class DMN(BaseModel):
             input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [L, F, N, V] -> [N, F, L, V]
             encoded = l * input_embed * input_mask
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
-
-        # dropout time
-        facts = dropout(facts, params.keep_prob, is_training)
+            # dropout
+            facts = dropout(facts, params.keep_prob, is_training)
 
         with tf.name_scope('InputFusion'):
             # Bidirectional RNN
-            with tf.variable_scope('Forward'):
+            with tf.variable_scope('Forward') as scope:
                 forward_states, _ = tf.nn.dynamic_rnn(gru, facts, fact_counts, dtype=tf.float32)
+                gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+                variable_summary(gru_variables)
 
-            with tf.variable_scope('Backward'):
+            with tf.variable_scope('Backward') as scope:
                 facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
                 backward_states, _ = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
+                gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+                variable_summary(gru_variables)
 
             # Use forward and backward states both
             facts = forward_states + backward_states  # [N, F, d]
 
-
-        with tf.variable_scope('Answer'):
+        with tf.name_scope('Answer'):
             answer_vec = tf.nn.embedding_lookup(embedding, answer)
 
         # Episodic Memory
-        with tf.variable_scope('Episodic'):
+        with tf.variable_scope('Episodic') as scope:
             episode = EpisodeModule(d, answer_vec, facts, is_training, params.batch_norm)
             memory = tf.identity(answer_vec) # [N, d]
 
             for t in range(params.memory_step):
-                with tf.variable_scope('Layer%d' % t) as scope:
+                with tf.name_scope('Layer%d' % t):
                     if params.memory_update == 'gru':
                         memory = gru(episode.new(memory), memory)[0]
                     else:
@@ -82,15 +86,18 @@ class DMN(BaseModel):
                             b_t = bias('b_t', d)
                             z = z + b_t
                         memory = tf.nn.relu(z)  # [N, d]
+                scope.reuse_variables()
 
-                    scope.reuse_variables()
+            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            variable_summary(variables)
 
-        # Regularizations
-        if params.batch_norm:
-            memory = batch_norm(memory, is_training=is_training)
-        memory = dropout(memory, params.keep_prob, is_training)
+            # variable_summary([episode.w1, episode.b1, episode.w2, episode.b2])
+            if params.batch_norm:
+                memory = batch_norm(memory, is_training=is_training)
+            memory = dropout(memory, params.keep_prob, is_training)
 
-        with tf.name_scope('Question'):
+
+        with tf.variable_scope('Question') as scope:
             q_cell = rnn_cell.GRUCell(V);
             tmp = np.zeros((N, V))
             tmp[:, 0] = 1
@@ -104,6 +111,8 @@ class DMN(BaseModel):
                                                   initial_state=memory,
                                                   cell=q_cell,
                                                   loop_function=loop_function)
+            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            # variable_summary(variables)
 
         with tf.name_scope('Loss'):
             target_list = tf.unpack(tf.transpose(question)) # Q * [N]

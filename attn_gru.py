@@ -25,9 +25,12 @@ class AttnGRU:
 
     def _linear(self, x, h, bias_default=0.0):
         I, D = x.get_shape().as_list()[1], self._num_units
-        w = weight('W', [I, D])
-        u = weight('U', [D, D])
-        b = bias('b', D, bias_default)
+        with tf.variable_scope('W'):
+            w = weight('W', [I, D])
+        with tf.variable_scope('U'):
+            u = weight('U', [D, D])
+        with tf.variable_scope('B'):
+            b = bias('b', D, bias_default)
 
         if self.batch_norm:
             with tf.variable_scope('Linear1'):

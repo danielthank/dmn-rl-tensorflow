@@ -33,6 +33,14 @@ def weight(name, shape, init='he', range=None):
     tf.add_to_collection('l2', tf.nn.l2_loss(var))  # Add L2 Loss
     return var
 
+def variable_summary(vars):
+    for var in vars:
+        with tf.name_scope('summaries'):
+            mean = tf.reduce_mean(var)
+            tf.scalar_summary('mean/' + var.name, mean)
+            tf.scalar_summary('stddev/' + var.name, tf.sqrt(tf.reduce_mean(tf.square(var - mean))))
+            tf.histogram_summary(var.name, var)
+
 def _get_dims(shape):
     fan_in = shape[0] if len(shape) == 2 else np.prod(shape[:-1])
     fan_out = shape[1] if len(shape) == 2 else shape[-1]
@@ -47,7 +55,8 @@ def bias(name, dim, initial_value=0.0):
     :return: Variable
     """
     dims = dim if isinstance(dim, list) else [dim]
-    return tf.get_variable(name, dims, initializer=tf.constant_initializer(initial_value))
+    var = tf.get_variable(name, dims, initializer=tf.constant_initializer(initial_value))
+    return var
 
 
 def batch_norm(x, is_training):

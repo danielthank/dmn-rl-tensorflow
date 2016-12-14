@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
-
 import tensorflow as tf
+import time
 
 from read_data import read_babi, get_max_sizes
 from data_utils import WordTable
@@ -10,7 +10,7 @@ flags = tf.app.flags
 
 # directories
 flags.DEFINE_string('model', 'Q2A', 'Model type [Q2A]')
-flags.DEFINE_boolean('test', False, 'true for testing, false for training [False]')
+flags.DEFINE_string('mode', 'train', 'train or test or custom[train]')
 flags.DEFINE_string('data_dir', 'babi', 'Data directory [babi]')
 flags.DEFINE_string('save_dir', 'save', 'Save path [save]')
 flags.DEFINE_string('load_dir', 'load', 'Load path [load]')
@@ -44,38 +44,48 @@ FLAGS = flags.FLAGS
 
 def main(_):
     words = WordTable()
+    if not os.path.exists(FLAGS.save_dir):
+        os.makedirs(FLAGS.save_dir, exist_ok=True)
+
     if FLAGS.model == 'Q2A':
         from Q2A import DMN
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, 'Q2A_task_{}_{}'.format(
+            FLAGS.task, int(time.time())))
     else:
         from A2Q import DMN
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, 'A2Q_task_{}_{}'.format(
+            FLAGS.task, int(time.time())))
 
     train = read_babi(os.path.join(FLAGS.data_dir, 'train'), FLAGS.task, 'train', FLAGS.batch_size, words)
     test = read_babi(os.path.join(FLAGS.data_dir, 'test'), FLAGS.task, 'test', FLAGS.batch_size, words)
     val = train.split_dataset(FLAGS.val_ratio)
-
     FLAGS.max_sent_size, FLAGS.max_ques_size, FLAGS.max_fact_count = get_max_sizes(train, test, val)
-    print('Word count: %d, Max sentence len : %d' % (words.vocab_size, FLAGS.max_sent_size))
-    print('Max question len: %d, Max fact count: %d' % (FLAGS.max_ques_size, FLAGS.max_fact_count))
 
-    # Modify save dir
-    import time
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, 'task_{}_{}'.format(
-        FLAGS.task, int(time.time())))
-
-    if not os.path.exists(FLAGS.save_dir):
-        os.makedirs(FLAGS.save_dir, exist_ok=True)
-
-    with tf.Session() as sess:
+    if FLAGS.mode == 'train':
         model = DMN(FLAGS, words)
-        sess.run(tf.initialize_all_variables())
-
-        if FLAGS.test:
+        if FLAGS.load:
             model.load(sess)
-            model.eval(sess, test, name='Test')
+
+        model.train(train, val)
+
+    elif FLAGS.mode == 'test':
+        model = DMN(FLAGS, words)
+        if FLAGS.load:
+            model.load(sess)
         else:
-            if FLAGS.load:
-                model.load(sess)
-            model.train(sess, train, val)
+            print('Need Loading')
+            return
+
+        model.eval(test, name='Test')
+
+    elif FLAGS.mode == 'custom':
+        FLAGS.batch_size = 1
+        model = DMN(flags, words)
+        if FLAGS.load:
+            model.load(sess)
+        else:
+            print('Need Loading')
+            return
 
 if __name__ == '__main__':
     tf.app.run()
