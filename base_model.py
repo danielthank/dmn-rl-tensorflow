@@ -12,16 +12,16 @@ class BaseModel(object):
         self.save_dir = params.save_dir
         self.load_dir = params.load_dir
 
+        self.sess = tf.Session()
         with tf.variable_scope('DMN'):
             print("Building DMN...")
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
             self.build()
-            self.merged = tf.merge_all_summaries()
+            self.merged = tf.summary.merge_all()
 
         self.saver = tf.train.Saver()
-        self.sess = tf.Session()
-        self.sess.run(tf.initialize_all_variables())
-        self.summary_writer = tf.train.SummaryWriter(logdir=self.save_dir, graph=self.sess.graph)
+        self.sess.run(tf.global_variables_initializer())
+        self.summary_writer = tf.summary.FileWriter(logdir=self.save_dir, graph=self.sess.graph)
     
     def __del__(self):
         self.sess.close()

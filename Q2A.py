@@ -4,7 +4,7 @@ from tensorflow.python.ops import rnn_cell
 
 from base_model import BaseModel
 from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm
+from nn import weight, bias, dropout, batch_norm, variable_summary
 
 
 class DMN(BaseModel):
@@ -46,10 +46,12 @@ class DMN(BaseModel):
 
         with tf.name_scope('InputFusion'):
             # Bidirectional RNN
-            with tf.variable_scope('Forward'):
+            with tf.variable_scope('Forward') as scope:
                 forward_states, _ = tf.nn.dynamic_rnn(gru, facts, fact_counts, dtype=tf.float32)
+                gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+                variable_summary(gru_variables)
 
-            with tf.variable_scope('Backward'):
+            with tf.variable_scope('Backward') as scope:
                 facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
                 backward_states, _ = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
 

@@ -37,9 +37,9 @@ def variable_summary(vars):
     for var in vars:
         with tf.name_scope('summaries'):
             mean = tf.reduce_mean(var)
-            tf.scalar_summary('mean/' + var.name, mean)
-            tf.scalar_summary('stddev/' + var.name, tf.sqrt(tf.reduce_mean(tf.square(var - mean))))
-            tf.histogram_summary(var.name, var)
+            tf.summary.scalar('mean/' + var.name, mean)
+            tf.summary.scalar('stddev/' + var.name, tf.sqrt(tf.reduce_mean(tf.square(var - mean))))
+            tf.summary.histogram(var.name, var)
 
 def _get_dims(shape):
     fan_in = shape[0] if len(shape) == 2 else np.prod(shape[:-1])
@@ -58,13 +58,13 @@ def bias(name, dim, initial_value=0.0):
     var = tf.get_variable(name, dims, initializer=tf.constant_initializer(initial_value))
     return var
 
-
+"""
 def batch_norm(x, is_training):
-    """ Batch normalization.
-    :param x: Tensor
-    :param is_training: boolean tf.Variable, true indicates training phase
-    :return: batch-normalized tensor
-    """
+    #Batch normalization.
+    #:param x: Tensor
+    #:param is_training: boolean tf.Variable, true indicates training phase
+    #:return: batch-normalized tensor
+    #
     with tf.variable_scope('BatchNorm'):
         # calculate dimensions (from tf.contrib.layers.batch_norm)
         inputs_shape = x.get_shape()
@@ -86,6 +86,18 @@ def batch_norm(x, is_training):
                             lambda: (ema.average(batch_mean), ema.average(batch_var)))
         normed = tf.nn.batch_normalization(x, mean, var, beta, gamma, 1e-3)
     return normed
+"""
+
+def batch_norm(x, is_training):
+    outputs = tf.contrib.layers.batch_norm(x,
+                                           decay=0.9,
+                                           is_training=is_training,
+                                           center=True,
+                                           scale=True,
+                                           activation_fn=tf.nn.relu,
+                                           updates_collections=None,
+                                           scope='BatchNorm')
+    return outputs
 
 def dropout(x, keep_prob, is_training):
     """ Apply dropout.
