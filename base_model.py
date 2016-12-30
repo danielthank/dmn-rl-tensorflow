@@ -22,11 +22,19 @@ class BaseModel(object):
         self.saver = tf.train.Saver()
         self.sess.run(tf.global_variables_initializer())
         self.summary_writer = tf.summary.FileWriter(logdir=self.save_dir, graph=self.sess.graph)
+
+        if hasattr(self, "accuracy"):
+            self.eval_list = [self.total_loss, self.global_step, self.accuracy]
+        else:
+            self.eval_list = [self.total_loss, self.global_step]
     
     def __del__(self):
         self.sess.close()
 
     def build(self):
+        raise NotImplementedError()
+
+    def decode(self):
         raise NotImplementedError()
 
     def get_feed_dict(self, batch, is_train):
@@ -38,46 +46,66 @@ class BaseModel(object):
 
     def test_batch(self, batch):
         feed_dict = self.get_feed_dict(batch, is_train=False)
-        return self.sess.run([self.total_loss, self.global_step], feed_dict=feed_dict)
+        return self.sess.run(self.eval_list, feed_dict=feed_dict)
 
     def train(self, train_data, val_data):
         params = self.params
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
+        min_loss = np.inf
         print("Training %d epochs ..." % num_epochs)
-        for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
-            for _ in range(num_batches):
-                batch = train_data.next_batch()
-                summary, _, global_step = self.train_batch(batch)
+        try:
+            for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
+                for _ in range(num_batches):
+                    batch = train_data.next_batch()
+                    summary, _, global_step = self.train_batch(batch)
 
-            self.summary_writer.add_summary(summary, global_step)
-            train_data.reset()
+                self.summary_writer.add_summary(summary, global_step)
+                train_data.reset()
 
-            if (epoch_no + 1) % params.acc_period == 0:
-                print()  # Newline for TQDM
-                self.eval(train_data, name='Training')
+                if (epoch_no + 1) % params.acc_period == 0:
+                    tqdm.write("")  # Newline for TQDM
+                    self.eval(train_data, name='Training')
 
-            if val_data and (epoch_no + 1) % params.val_period == 0:
-                self.eval(val_data, name='Validation')
+                if (epoch_no + 1) % params.val_period == 0:
+                    loss = np.inf
+                    if val_data:
+                        loss = self.eval(val_data, name='Validation')
+                    if loss <= min_loss:
+                        min_loss = loss
+                        self.save()
+            print("Training completed.")
 
-            if (epoch_no + 1) % params.save_period == 0:
+        except KeyboardInterrupt:
+            loss = np.inf
+            if val_data:
+                loss = self.eval(val_data, name='Validation')
+            if loss <= min_loss:
+                min_loss = loss
                 self.save()
+            print("Stop the training by console!")
 
-        print("Training completed.")
 
     def eval(self, data, name):
         num_batches = data.num_batches
         losses = []
+        accs = []
         for _ in range(num_batches):
             batch = data.next_batch()
-            cur_loss, global_step = self.test_batch(batch)
-            losses.append(cur_loss)
+            out = self.test_batch(batch)
+            losses.append(out[0])
+            global_step = out[1]
+            if len(out) == 3:
+                accs.append(out[2])
         data.reset()
         loss = np.mean(losses)
-
-        print("[%s] step %d, Loss = %.4f" % \
-              (name, global_step, loss))
+        if len(accs) == 0:
+            acc = 0.
+        else:
+            acc = np.mean(accs)
+        tqdm.write("[%s] step %d, Loss = %.4f, Acc = %.4f" % \
+              (name, global_step, loss, acc))
         return loss
 
     def save(self):

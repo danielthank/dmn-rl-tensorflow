@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+from tqdm import tqdm
 from tensorflow.python.ops import rnn_cell
 
 from base_model import BaseModel
@@ -112,8 +113,28 @@ class DMN(BaseModel):
             accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
 
         # Training
+        def learning_rate_decay_fn(lr, global_step):
+            return tf.train.exponential_decay(lr,
+                                              global_step,
+                                              decay_steps=3000,
+                                              decay_rate=0.5,
+                                              staircase=True)
+        OPTIMIZER_SUMMARIES = ["learning_rate",
+                               "loss",
+                               "gradients",
+                               "gradient_norm"]
+        opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                                                 self.global_step,
+                                                 learning_rate=params.learning_rate,
+                                                 optimizer=tf.train.AdamOptimizer,
+                                                 clip_gradients=5.,
+                                                 learning_rate_decay_fn=learning_rate_decay_fn,
+                                                 summaries=OPTIMIZER_SUMMARIES)
+        """
         optimizer = tf.train.AdamOptimizer(params.learning_rate)
         opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
+        variable_summary([lr])
+        """
 
         # placeholders
         self.x = input
@@ -124,6 +145,7 @@ class DMN(BaseModel):
         self.is_training = is_training
 
         # tensors
+        self.output = logits
         self.total_loss = total_loss
         self.num_corrects = num_corrects
         self.accuracy = accuracy
@@ -180,3 +202,24 @@ class DMN(BaseModel):
             self.fc: fact_counts,
             self.is_training: is_train
         }
+
+    def decode(self, data, outputfile, all=True):
+        tqdm.write("Write decoded output...")
+        num_batches = data.num_batches
+        for _ in range(num_batches):
+            batch = data.next_batch()
+            feed_dict = self.get_feed_dict(batch, False)
+            outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            for idx in range(len(outputs)):
+                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(token+' ' for token in batch[1][idx])
+                ans = batch[2][idx]
+                p_ans = self.words.idx2word[np.argmax(outputs[idx])]
+                outputfile.write("Content: "+content.strip()+'\n')
+                outputfile.write("Question: "+question.strip()+'\n')
+                outputfile.write("Ans: "+ans+'\n')
+                outputfile.write("Predict_A: "+p_ans+"\n\n")
+            if not all:
+                break
+        data.reset()
+        tqdm.write("Finished")

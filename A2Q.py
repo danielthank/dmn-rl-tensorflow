@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm import tqdm
 import tensorflow as tf
 from tensorflow.python.ops import rnn_cell
 
@@ -70,7 +71,7 @@ class DMN(BaseModel):
             memory = tf.identity(answer_vec) # [N, d]
 
             for t in range(params.memory_step):
-                with tf.name_scope('Layer%d' % t):
+                with tf.variable_scope('Layer%d' % t):
                     if params.memory_update == 'gru':
                         memory = gru(episode.new(memory), memory)[0]
                     else:
@@ -86,7 +87,7 @@ class DMN(BaseModel):
                             b_t = bias('b_t', d)
                             z = z + b_t
                         memory = tf.nn.relu(z)  # [N, d]
-                scope.reuse_variables()
+                #scope.reuse_variables()
 
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
@@ -98,21 +99,33 @@ class DMN(BaseModel):
 
 
         with tf.variable_scope('Question') as scope:
-            q_cell = rnn_cell.GRUCell(V);
+            proj_w = weight('proj_w', [d, A])
+            proj_b = bias('proj_b', A)
+            q_cell = rnn_cell.GRUCell(d);
             tmp = np.zeros((N, V))
             tmp[:, 0] = 1
             decoder_inputs = [tf.concat(1, [tf.constant(tmp, dtype=tf.float32), memory])] * Q
+            """
             def loop_function(prev, i):
                 prev_symbol = tf.argmax(prev, 1)
                 now_input = tf.nn.embedding_lookup(embedding, prev_symbol);
                 return tf.concat(1, [now_input, memory])
-
+            """
+            def loop_function(prev, _, update_embedding=True):
+                prev = tf.matmul(prev, proj_w) + proj_b
+                prev_symbol = tf.argmax(prev, 1)
+                # Note that gradients will not propagate through the second parameter of
+                # embedding_lookup.
+                emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
+                if not update_embedding:
+                    emb_prev = tf.stop_gradient(emb_prev)
+                return tf.concat(1, [emb_prev, memory])
             states, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
                                                   initial_state=memory,
                                                   cell=q_cell,
                                                   loop_function=loop_function)
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-            # variable_summary(variables)
+            variable_summary(variables)
 
         with tf.name_scope('Loss'):
             target_list = tf.unpack(tf.transpose(question)) # Q * [N]
@@ -122,8 +135,23 @@ class DMN(BaseModel):
             total_loss = loss + params.weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Training
+        def learning_rate_decay_fn(lr, global_step):
+            return tf.train.exponential_decay(lr,
+                                              global_step,
+                                              decay_steps=5000,
+                                              decay_rate=0.95,
+                                              staircase=True)
+        opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                                                 self.global_step,
+                                                 learning_rate=params.learning_rate,
+                                                 optimizer=tf.train.AdamOptimizer,
+                                                 clip_gradients=5.,
+                                                 learning_rate_decay_fn=learning_rate_decay_fn)
+        """
         optimizer = tf.train.AdamOptimizer(params.learning_rate)
         opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
+        variable_summary([lr])
+        """
 
         # placeholders
         self.x = input
@@ -135,6 +163,7 @@ class DMN(BaseModel):
 
         # tensors
         self.total_loss = total_loss
+        self.output = states
         self.opt_op = opt_op
 
     def positional_encoding(self):
@@ -188,3 +217,27 @@ class DMN(BaseModel):
             self.fc: fact_counts,
             self.is_training: is_train
         }
+
+    def decode(self, data, outputfile, all=True):
+        tqdm.write("Write decoded output...")
+        num_batches = data.num_batches
+        for _ in range(num_batches):
+            batch = data.next_batch()
+            feed_dict = self.get_feed_dict(batch, False)
+            outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            for idx in range(len(outputs[0])):
+                pred_q = []
+                for time in outputs:
+                    pred_q.append(self.words.idx2word[np.argmax(time[idx])])
+                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(token+' ' for token in batch[1][idx])
+                ans = batch[2][idx]
+                pred_q = "".join(token+' ' for token in pred_q)
+                outputfile.write("Content: "+content.strip()+'\n')
+                outputfile.write("Question: "+question.strip()+'\n')
+                outputfile.write("Ans: "+ans+'\n')
+                outputfile.write("Predict_Q: "+pred_q.strip()+"\n\n")
+            if not all:
+                break
+        data.reset()
+        tqdm.write("Finished")

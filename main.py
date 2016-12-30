@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import tensorflow as tf
 import time
 
@@ -23,7 +24,8 @@ flags.DEFINE_float('learning_rate', 0.002, 'Learning rate [0.002]')
 flags.DEFINE_boolean('load', False, 'Start training from saved model? [False]')
 flags.DEFINE_integer('acc_period', 10, 'Training accuracy display period [10]')
 flags.DEFINE_integer('val_period', 40, 'Validation period (for display purpose) [40]')
-flags.DEFINE_integer('save_period', 80, 'Save period [80]')
+flags.DEFINE_integer('save_period', 80, 'Save period [80]') ## not used, use val_period as save_period instead to perform 
+                                                            ## early stopping
 
 # model params
 flags.DEFINE_integer('memory_step', 3, 'Episodic Memory steps [3]')
@@ -64,25 +66,26 @@ def main(_):
     if FLAGS.mode == 'train':
         model = DMN(FLAGS, words)
         if FLAGS.load:
-            model.load(sess)
+            model.load()
 
         model.train(train, val)
 
     elif FLAGS.mode == 'test':
         model = DMN(FLAGS, words)
         if FLAGS.load:
-            model.load(sess)
+            model.load()
         else:
             print('Need Loading')
             return
 
         model.eval(test, name='Test')
+        model.decode(test, sys.stdout, all=False)
 
     elif FLAGS.mode == 'custom':
         FLAGS.batch_size = 1
         model = DMN(flags, words)
         if FLAGS.load:
-            model.load(sess)
+            model.load()
         else:
             print('Need Loading')
             return

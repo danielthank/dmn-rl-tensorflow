@@ -90,7 +90,7 @@ def batch_norm(x, is_training):
 
 def batch_norm(x, is_training):
     outputs = tf.contrib.layers.batch_norm(x,
-                                           decay=0.9,
+                                           decay=0.999,
                                            is_training=is_training,
                                            center=True,
                                            scale=True,
@@ -122,3 +122,4 @@ def fully_connected(input, num_neurons, name, is_training):
     l = tf.matmul(input, w)
     l = batch_norm(l, is_training)
     return tf.nn.relu(l)
+
