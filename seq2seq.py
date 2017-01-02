@@ -2,15 +2,15 @@ import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 from tensorflow.python.ops import rnn_cell
+#from tensorflow.contrib.rnn import static_bidirectional_rnn
+from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
 from base_model import BaseModel
 from episode_module import EpisodeModule
 from nn import weight, bias, dropout, batch_norm, variable_summary
 
 
-class DMN(BaseModel):
-    """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
-        Improved End-To-End version."""
+class Seq2Seq(BaseModel):
     def build(self, feed_previous):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
@@ -28,55 +28,66 @@ class DMN(BaseModel):
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
         l = self.positional_encoding()
-        embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+        with tf.variable_scope('Embedding'):
+            embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+            variable_summary([embedding])
 
         with tf.name_scope('SentenceReader'):
-            input_list = tf.unpack(tf.transpose(input))  # L x [F, N]
-            input_embed = []
-            for facts in input_list:
-                facts = tf.unpack(facts)
-                embed = tf.pack([tf.nn.embedding_lookup(embedding, w) for w in facts])  # [F, N, V]
-                input_embed.append(embed)
+            input_embed = tf.nn.embedding_lookup(embedding, input) # [N, F, L] -> [N, F, L, V]
             # apply positional encoding
-            input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [L, F, N, V] -> [N, F, L, V]
             encoded = l * input_embed * input_mask
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
+            # dropout
+            """
+            facts = dropout(facts, params.keep_prob, is_training)
+            """
 
-        # dropout time
-        facts = dropout(facts, params.keep_prob, is_training)
-
-        with tf.name_scope('InputFusion'):
+        with tf.name_scope('InputFusion') as scope:
             # Bidirectional RNN
+            f_outputs, fw, bw = stack_bidirectional_dynamic_rnn([gru],
+                                                                [gru],
+                                                                facts,
+                                                                sequence_length=fact_counts,
+                                                                dtype=tf.float32)
+            # facts: [N, F, d*2]
+            gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope)]
+            variable_summary(gru_variables)
+            f_outputs = tf.split(2, 2, f_outputs) # [N, F, d*2] -> 2*[N, F, d]
+            f_outputs = f_outputs[0] + f_outputs[1]
+            """
             with tf.variable_scope('Forward') as scope:
-                forward_states, _ = tf.nn.dynamic_rnn(gru, facts, fact_counts, dtype=tf.float32)
+                _, forward_state = tf.nn.dynamic_rnn(gru, facts, fact_counts, dtype=tf.float32)
                 gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
                 variable_summary(gru_variables)
-
             with tf.variable_scope('Backward') as scope:
                 facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
                 backward_states, _ = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
-
+                gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+                variable_summary(gru_variables)
+            """
+            """
             # Use forward and backward states both
-            facts = forward_states + backward_states  # [N, F, d]
+            #facts = forward_states + backward_states  # [N, F, d]
+            f_outputs = forward_state
+            """
 
-        with tf.variable_scope('Question'):
-            ques_list = tf.unpack(tf.transpose(question)) # Q * [N]
-            ques_embed = [tf.nn.embedding_lookup(embedding, w) for w in ques_list] # Q * [N, V]
-            _, question_vec = tf.nn.rnn(gru, ques_embed, dtype=tf.float32) # [N, d]
+        """
+        with tf.name_scope('Answer'):
+            answer_vec = tf.nn.embedding_lookup(embedding, answer)
 
         # Episodic Memory
-        with tf.variable_scope('Episodic'):
-            episode = EpisodeModule(d, question_vec, facts, is_training, params.batch_norm)
-            memory = tf.identity(question_vec) # [N, d]
+        with tf.variable_scope('Episodic') as scope:
+            episode = EpisodeModule(d, answer_vec, facts, is_training, params.batch_norm)
+            memory = tf.identity(answer_vec) # [N, d]
 
             for t in range(params.memory_step):
-                with tf.variable_scope('Layer%d' % t) as scope:
+                with tf.variable_scope('Layer%d' % t):
                     if params.memory_update == 'gru':
                         memory = gru(episode.new(memory), memory)[0]
                     else:
                         # ReLU update
                         c = episode.new(memory)
-                        concated = tf.concat(1, [memory, c, question_vec])
+                        concated = tf.concat(1, [memory, c, answer_vec])
 
                         w_t = weight('w_t', [3 * d, d])
                         z = tf.matmul(concated, w_t)
@@ -86,37 +97,64 @@ class DMN(BaseModel):
                             b_t = bias('b_t', d)
                             z = z + b_t
                         memory = tf.nn.relu(z)  # [N, d]
+                #scope.reuse_variables()
 
-                    scope.reuse_variables()
+            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            variable_summary(variables)
 
-        # Regularizations
-        if params.batch_norm:
-            memory = batch_norm(memory, is_training=is_training)
-        memory = dropout(memory, params.keep_prob, is_training)
+            # variable_summary([episode.w1, episode.b1, episode.w2, episode.b2])
+            if params.batch_norm:
+                memory = batch_norm(memory, is_training=is_training)
+            memory = dropout(memory, params.keep_prob, is_training)
+        """
 
-        with tf.name_scope('Answer'):
-            # Answer module : feed-forward version (for it is one word answer)
-            w_a = weight('w_a', [d, A], init='xavier')
-            logits = tf.matmul(memory, w_a)  # [N, A]
+        with tf.variable_scope('Question') as scope:
+            proj_w = weight('proj_w', [d, A])
+            proj_b = bias('proj_b', A)
+            go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
+            decoder_inputs = tf.concat(1, [go_pad, question])
+            decoder_inputs = tf.nn.embedding_lookup(embedding, decoder_inputs) # [N, Q+1, V]
+            decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, N, V]
+            decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [N, V]
+            q_cell = rnn_cell.GRUCell(d)
+            #q_init_state = q_cell.zero_state(batch_size=N, dtype=tf.float32)
+            q_init_state = fw[0] + bw[0]
+            if feed_previous:
+                def _loop_fn(prev, i):
+                    prev = tf.matmul(prev, proj_w) + proj_b
+                    prev_symbol = tf.argmax(prev, 1)
+                    now_input = tf.nn.embedding_lookup(embedding, prev_symbol);
+                    return now_input
+                loop_function = _loop_fn
+            else:
+                loop_function = None
+            q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                                                     initial_state=q_init_state,
+                                                     cell=q_cell,
+                                                     loop_function=loop_function)
+            """
+            q_outputs, _ = tf.nn.seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
+                                                           initial_state=q_init_state,
+                                                           attention_states=f_outputs,
+                                                           cell=q_cell,
+                                                           loop_function=loop_function)
+            """
+            q_outputs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
+            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            variable_summary(variables)
 
         with tf.name_scope('Loss'):
+            target_list = tf.unstack(tf.transpose(question)) # Q * [N]
             # Cross-Entropy loss
-            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, answer)
-            loss = tf.reduce_mean(cross_entropy)
+            loss = tf.nn.seq2seq.sequence_loss(q_outputs, target_list,
+                                               [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )
             total_loss = loss + params.weight_decay * tf.add_n(tf.get_collection('l2'))
-
-        with tf.variable_scope('Accuracy'):
-            # Accuracy
-            predicts = tf.cast(tf.argmax(logits, 1), 'int32')
-            corrects = tf.equal(predicts, answer)
-            num_corrects = tf.reduce_sum(tf.cast(corrects, tf.float32))
-            accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
 
         # Training
         def learning_rate_decay_fn(lr, global_step):
             return tf.train.exponential_decay(lr,
                                               global_step,
-                                              decay_steps=3000,
+                                              decay_steps=5000,
                                               decay_rate=0.5,
                                               staircase=True)
         OPTIMIZER_SUMMARIES = ["learning_rate",
@@ -130,11 +168,8 @@ class DMN(BaseModel):
                                                  clip_gradients=5.,
                                                  learning_rate_decay_fn=learning_rate_decay_fn,
                                                  summaries=OPTIMIZER_SUMMARIES)
-        """
         optimizer = tf.train.AdamOptimizer(params.learning_rate)
         opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
-        variable_summary([lr])
-        """
 
         # placeholders
         self.x = input
@@ -145,10 +180,8 @@ class DMN(BaseModel):
         self.is_training = is_training
 
         # tensors
-        self.output = logits
         self.total_loss = total_loss
-        self.num_corrects = num_corrects
-        self.accuracy = accuracy
+        self.output = q_outputs
         self.opt_op = opt_op
 
     def positional_encoding(self):
@@ -210,15 +243,18 @@ class DMN(BaseModel):
             batch = data.next_batch()
             feed_dict = self.get_feed_dict(batch, False)
             outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            for idx in range(len(outputs)):
+            for idx in range(len(outputs[0])):
+                pred_q = []
+                for time in outputs:
+                    pred_q.append(self.words.idx2word[np.argmax(time[idx])])
                 content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
                 question = "".join(token+' ' for token in batch[1][idx])
                 ans = batch[2][idx]
-                p_ans = self.words.idx2word[np.argmax(outputs[idx])]
+                pred_q = "".join(token+' ' for token in pred_q)
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
                 outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_A: "+p_ans+"\n\n")
+                outputfile.write("Predict_Q: "+pred_q.strip()+"\n\n")
             if not all:
                 break
         data.reset()

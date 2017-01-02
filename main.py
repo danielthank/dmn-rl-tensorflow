@@ -50,12 +50,16 @@ def main(_):
         os.makedirs(FLAGS.save_dir, exist_ok=True)
 
     if FLAGS.model == 'Q2A':
-        from Q2A import DMN
-        FLAGS.save_dir = os.path.join(FLAGS.save_dir, 'Q2A_task_{}_{}'.format(
+        from Q2A import DMN as Model
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}_{}'.format(
             FLAGS.task, int(time.time())))
-    else:
-        from A2Q import DMN
-        FLAGS.save_dir = os.path.join(FLAGS.save_dir, 'A2Q_task_{}_{}'.format(
+    elif FLAGS.model == 'A2Q':
+        from A2Q import DMN as Model
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}_{}'.format(
+            FLAGS.task, int(time.time())))
+    elif FLAGS.model == 'SEQ2SEQ':
+        from seq2seq import Seq2Seq as Model
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}_{}'.format(
             FLAGS.task, int(time.time())))
 
     train = read_babi(os.path.join(FLAGS.data_dir, 'train'), FLAGS.task, 'train', FLAGS.batch_size, words)
@@ -64,14 +68,14 @@ def main(_):
     FLAGS.max_sent_size, FLAGS.max_ques_size, FLAGS.max_fact_count = get_max_sizes(train, test, val)
 
     if FLAGS.mode == 'train':
-        model = DMN(FLAGS, words)
+        model = Model(FLAGS, words)
         if FLAGS.load:
             model.load()
 
         model.train(train, val)
 
     elif FLAGS.mode == 'test':
-        model = DMN(FLAGS, words)
+        model = Model(FLAGS, words)
         if FLAGS.load:
             model.load()
         else:

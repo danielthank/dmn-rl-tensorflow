@@ -90,7 +90,7 @@ def batch_norm(x, is_training):
 
 def batch_norm(x, is_training):
     outputs = tf.contrib.layers.batch_norm(x,
-                                           decay=0.999,
+                                           decay=0.9,
                                            is_training=is_training,
                                            center=True,
                                            scale=True,

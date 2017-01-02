@@ -11,7 +11,7 @@ from nn import weight, bias, dropout, batch_norm, variable_summary
 class DMN(BaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
-    def build(self):
+    def build(self, feed_previous):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -97,7 +97,6 @@ class DMN(BaseModel):
                 memory = batch_norm(memory, is_training=is_training)
             memory = dropout(memory, params.keep_prob, is_training)
 
-
         with tf.variable_scope('Question') as scope:
             proj_w = weight('proj_w', [d, A])
             proj_b = bias('proj_b', A)
@@ -124,6 +123,7 @@ class DMN(BaseModel):
                                                   initial_state=memory,
                                                   cell=q_cell,
                                                   loop_function=loop_function)
+            states = [tf.matmul(state, proj_w) + proj_b for state in states]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
 

@@ -60,7 +60,7 @@ class WordTable:
     def __init__(self, word2vec=None, embed_size=0):
         self.word2vec = word2vec
         self.word2idx = {}
-        self.idx2word = ['<eos>']  # zero padding will be <eos>
+        self.idx2word = ['<eos>', '<go>']  # zero padding will be <eos>
         self.embed_size = embed_size
 
     def add_vocab(self, *words):

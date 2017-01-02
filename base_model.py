@@ -16,7 +16,10 @@ class BaseModel(object):
         with tf.variable_scope('DMN'):
             print("Building DMN...")
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.build()
+            if params.mode == 'train':
+                self.build(feed_previous=False)
+            elif params.mode == 'test':
+                self.build(feed_previous=True)
             self.merged = tf.summary.merge_all()
 
         self.saver = tf.train.Saver()
