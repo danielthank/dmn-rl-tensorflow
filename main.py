@@ -15,6 +15,7 @@ flags.DEFINE_string('mode', 'train', 'train or test or custom[train]')
 flags.DEFINE_string('data_dir', 'babi', 'Data directory [babi]')
 flags.DEFINE_string('save_dir', 'save', 'Save path [save]')
 flags.DEFINE_string('load_dir', 'load', 'Load path [load]')
+flags.DEFINE_string('expert_dir', '', 'Expert path []') ## for loading expert in GQ model
 
 # training options
 flags.DEFINE_bool('gpu', True, 'Use GPU? [True]')
@@ -51,28 +52,29 @@ def main(_):
 
     if FLAGS.model == 'Q2A':
         from Q2A import DMN as Model
-        FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}_{}'.format(
-            FLAGS.task, int(time.time())))
     elif FLAGS.model == 'A2Q':
         from A2Q import DMN as Model
-        FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}_{}'.format(
-            FLAGS.task, int(time.time())))
     elif FLAGS.model == 'SEQ2SEQ':
         from seq2seq import Seq2Seq as Model
-        FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}_{}'.format(
-            FLAGS.task, int(time.time())))
+    else:
+        raise Exception("Unsupported model!")
+    FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}'.format(
+        FLAGS.task))
 
     train = read_babi(os.path.join(FLAGS.data_dir, 'train'), FLAGS.task, 'train', FLAGS.batch_size, words)
     test = read_babi(os.path.join(FLAGS.data_dir, 'test'), FLAGS.task, 'test', FLAGS.batch_size, words)
     val = train.split_dataset(FLAGS.val_ratio)
     FLAGS.max_sent_size, FLAGS.max_ques_size, FLAGS.max_fact_count = get_max_sizes(train, test, val)
-
     if FLAGS.mode == 'train':
+        summary_dir = os.path.join(FLAGS.save_dir, "summary")
+        if tf.gfile.Exists(summary_dir):
+            tf.gfile.DeleteRecursively(summary_dir)
         model = Model(FLAGS, words)
         if FLAGS.load:
             model.load()
 
         model.train(train, val)
+        model.save_flags()
 
     elif FLAGS.mode == 'test':
         model = Model(FLAGS, words)
@@ -85,14 +87,8 @@ def main(_):
         model.eval(test, name='Test')
         model.decode(test, sys.stdout, all=False)
 
-    elif FLAGS.mode == 'custom':
-        FLAGS.batch_size = 1
-        model = DMN(flags, words)
-        if FLAGS.load:
-            model.load()
-        else:
-            print('Need Loading')
-            return
+    else:
+        raise Exception("Unsupported executing mode!")
 
 if __name__ == '__main__':
     tf.app.run()

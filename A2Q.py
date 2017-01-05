@@ -3,15 +3,15 @@ from tqdm import tqdm
 import tensorflow as tf
 from tensorflow.python.ops import rnn_cell
 
-from base_model import BaseModel
+from GQ_base_model import GQBaseModel
 from episode_module import EpisodeModule
 from nn import weight, bias, dropout, batch_norm, variable_summary
 
 
-class DMN(BaseModel):
+class DMN(GQBaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
-    def build(self, feed_previous):
+    def build(self, feed_previous, forward_only):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -56,6 +56,7 @@ class DMN(BaseModel):
             with tf.variable_scope('Backward') as scope:
                 facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
                 backward_states, _ = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
+                backward_states = tf.reverse_sequence(backward_states, fact_counts, 1)
                 gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
                 variable_summary(gru_variables)
 
@@ -100,58 +101,57 @@ class DMN(BaseModel):
         with tf.variable_scope('Question') as scope:
             proj_w = weight('proj_w', [d, A])
             proj_b = bias('proj_b', A)
+            go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
+            decoder_inputs = tf.concat(1, [go_pad, question])
+            decoder_inputs = tf.nn.embedding_lookup(embedding, decoder_inputs) # [N, Q+1, V]
+            decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, N, V]
+            decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [N, V]
+            decoder_inputs = [tf.concat(1, [de_inp, memory]) for de_inp in decoder_inputs]
             q_cell = rnn_cell.GRUCell(d);
-            tmp = np.zeros((N, V))
-            tmp[:, 0] = 1
-            decoder_inputs = [tf.concat(1, [tf.constant(tmp, dtype=tf.float32), memory])] * Q
-            """
-            def loop_function(prev, i):
-                prev_symbol = tf.argmax(prev, 1)
-                now_input = tf.nn.embedding_lookup(embedding, prev_symbol);
-                return tf.concat(1, [now_input, memory])
-            """
-            def loop_function(prev, _, update_embedding=True):
-                prev = tf.matmul(prev, proj_w) + proj_b
-                prev_symbol = tf.argmax(prev, 1)
-                # Note that gradients will not propagate through the second parameter of
-                # embedding_lookup.
-                emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
-                if not update_embedding:
-                    emb_prev = tf.stop_gradient(emb_prev)
-                return tf.concat(1, [emb_prev, memory])
-            states, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
-                                                  initial_state=memory,
-                                                  cell=q_cell,
-                                                  loop_function=loop_function)
-            states = [tf.matmul(state, proj_w) + proj_b for state in states]
+            q_init_state = memory
+            if feed_previous:
+                def _loop_fn(prev, i):
+                    prev = tf.matmul(prev, proj_w) + proj_b
+                    prev_symbol = tf.argmax(prev, 1)
+                    emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol);
+                    return tf.concat(1, [emb_prev, memory])
+                loop_function = _loop_fn
+            else:
+                loop_function = None
+            q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                                                     initial_state=q_init_state,
+                                                     cell=q_cell,
+                                                     loop_function=loop_function)
+            q_outputs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
 
         with tf.name_scope('Loss'):
             target_list = tf.unpack(tf.transpose(question)) # Q * [N]
             # Cross-Entropy loss
-            loss = tf.nn.seq2seq.sequence_loss(states, target_list,
+            loss = tf.nn.seq2seq.sequence_loss(q_outputs, target_list,
                                                [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )
             total_loss = loss + params.weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Training
-        def learning_rate_decay_fn(lr, global_step):
-            return tf.train.exponential_decay(lr,
-                                              global_step,
-                                              decay_steps=5000,
-                                              decay_rate=0.95,
-                                              staircase=True)
-        opt_op = tf.contrib.layers.optimize_loss(total_loss,
-                                                 self.global_step,
-                                                 learning_rate=params.learning_rate,
-                                                 optimizer=tf.train.AdamOptimizer,
-                                                 clip_gradients=5.,
-                                                 learning_rate_decay_fn=learning_rate_decay_fn)
-        """
-        optimizer = tf.train.AdamOptimizer(params.learning_rate)
-        opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
-        variable_summary([lr])
-        """
+        if not forward_only:
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=5000,
+                                                  decay_rate=0.95,
+                                                  staircase=True)
+            opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                                                     self.global_step,
+                                                     learning_rate=params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=5.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn)
+            """
+            optimizer = tf.train.AdamOptimizer(params.learning_rate)
+            opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
+            variable_summary([lr])
+            """
 
         # placeholders
         self.x = input
@@ -163,8 +163,9 @@ class DMN(BaseModel):
 
         # tensors
         self.total_loss = total_loss
-        self.output = states
-        self.opt_op = opt_op
+        self.output = q_outputs
+        if not forward_only:
+            self.opt_op = opt_op
 
     def positional_encoding(self):
         V, L = self.params.embed_size, self.params.max_sent_size

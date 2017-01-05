@@ -5,13 +5,13 @@ from tensorflow.python.ops import rnn_cell
 #from tensorflow.contrib.rnn import static_bidirectional_rnn
 from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
-from base_model import BaseModel
+from GQ_base_model import GQBaseModel
 from episode_module import EpisodeModule
 from nn import weight, bias, dropout, batch_norm, variable_summary
 
 
-class Seq2Seq(BaseModel):
-    def build(self, feed_previous):
+class Seq2Seq(GQBaseModel):
+    def build(self, feed_previous, forward_only):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -44,6 +44,7 @@ class Seq2Seq(BaseModel):
 
         with tf.name_scope('InputFusion') as scope:
             # Bidirectional RNN
+            """
             f_outputs, fw, bw = stack_bidirectional_dynamic_rnn([gru],
                                                                 [gru],
                                                                 facts,
@@ -59,6 +60,7 @@ class Seq2Seq(BaseModel):
                 _, forward_state = tf.nn.dynamic_rnn(gru, facts, fact_counts, dtype=tf.float32)
                 gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
                 variable_summary(gru_variables)
+            """
             with tf.variable_scope('Backward') as scope:
                 facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
                 backward_states, _ = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
@@ -67,7 +69,7 @@ class Seq2Seq(BaseModel):
             """
             """
             # Use forward and backward states both
-            #facts = forward_states + backward_states  # [N, F, d]
+            #f_outputs = forward_states + backward_states  # [N, F, d]
             f_outputs = forward_state
             """
 
@@ -118,7 +120,8 @@ class Seq2Seq(BaseModel):
             decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [N, V]
             q_cell = rnn_cell.GRUCell(d)
             #q_init_state = q_cell.zero_state(batch_size=N, dtype=tf.float32)
-            q_init_state = fw[0] + bw[0]
+            #q_init_state = fw[0] + bw[0]
+            q_init_state = forward_state
             if feed_previous:
                 def _loop_fn(prev, i):
                     prev = tf.matmul(prev, proj_w) + proj_b
@@ -168,8 +171,10 @@ class Seq2Seq(BaseModel):
                                                  clip_gradients=5.,
                                                  learning_rate_decay_fn=learning_rate_decay_fn,
                                                  summaries=OPTIMIZER_SUMMARIES)
+        """
         optimizer = tf.train.AdamOptimizer(params.learning_rate)
         opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
+        """
 
         # placeholders
         self.x = input

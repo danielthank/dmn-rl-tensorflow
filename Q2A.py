@@ -11,7 +11,7 @@ from nn import weight, bias, dropout, batch_norm, variable_summary
 class DMN(BaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
-    def build(self, feed_previous):
+    def build(self, feed_previous, forward_only):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -55,6 +55,8 @@ class DMN(BaseModel):
             with tf.variable_scope('Backward') as scope:
                 facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
                 backward_states, _ = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
+                backward_states = tf.reverse_sequence(backward_states, fact_counts, 1)
+
 
             # Use forward and backward states both
             facts = forward_states + backward_states  # [N, F, d]
@@ -113,28 +115,29 @@ class DMN(BaseModel):
             accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
 
         # Training
-        def learning_rate_decay_fn(lr, global_step):
-            return tf.train.exponential_decay(lr,
-                                              global_step,
-                                              decay_steps=3000,
-                                              decay_rate=0.5,
-                                              staircase=True)
-        OPTIMIZER_SUMMARIES = ["learning_rate",
-                               "loss",
-                               "gradients",
-                               "gradient_norm"]
-        opt_op = tf.contrib.layers.optimize_loss(total_loss,
-                                                 self.global_step,
-                                                 learning_rate=params.learning_rate,
-                                                 optimizer=tf.train.AdamOptimizer,
-                                                 clip_gradients=5.,
-                                                 learning_rate_decay_fn=learning_rate_decay_fn,
-                                                 summaries=OPTIMIZER_SUMMARIES)
-        """
-        optimizer = tf.train.AdamOptimizer(params.learning_rate)
-        opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
-        variable_summary([lr])
-        """
+        if not forward_only:
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=3000,
+                                                  decay_rate=0.5,
+                                                  staircase=True)
+            OPTIMIZER_SUMMARIES = ["learning_rate",
+                                   "loss",
+                                   "gradients",
+                                   "gradient_norm"]
+            opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                                                     self.global_step,
+                                                     learning_rate=params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=10.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn,
+                                                     summaries=OPTIMIZER_SUMMARIES)
+            """
+            optimizer = tf.train.AdamOptimizer(params.learning_rate)
+            opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
+            variable_summary([lr])
+            """
 
         # placeholders
         self.x = input
@@ -149,7 +152,8 @@ class DMN(BaseModel):
         self.total_loss = total_loss
         self.num_corrects = num_corrects
         self.accuracy = accuracy
-        self.opt_op = opt_op
+        if not forward_only:
+            self.opt_op = opt_op
 
     def positional_encoding(self):
         V, L = self.params.embed_size, self.params.max_sent_size
@@ -223,3 +227,5 @@ class DMN(BaseModel):
                 break
         data.reset()
         tqdm.write("Finished")
+
+    def aaa(self, feed_dict):

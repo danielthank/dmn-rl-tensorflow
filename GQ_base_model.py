@@ -9,6 +9,8 @@ import tensorflow as tf
 from tensorflow.contrib.layers import xavier_initializer
 from tqdm import tqdm
 
+from Q2A import DMN as ExpertModel
+
 
 def isnamedtupleinstance(x):
     t = type(x)
@@ -37,7 +39,7 @@ def flags2params(flags):
         raise Exception("Unsupported type of flags!")
 
 
-class BaseModel(object):
+class GQBaseModel(object):
     """ Code from mem2nn-tensorflow. """
     def __init__(self, flags, words):
         self.params = flags2params(flags)
@@ -50,10 +52,14 @@ class BaseModel(object):
                 raise Exception("incompatible task!")
             self.params = self.params._replace(**load_params)
 
+        print("Loading Expert...")
+        self.expert = self.load_expert()
+        self.expert.load()
+
         self.sess = tf.Session()
         default_init = xavier_initializer()
-        with tf.variable_scope('DMN', initializer=default_init):
-            print("Building DMN...")
+        with tf.variable_scope('GQ', initializer=default_init):
+            print("Building GQ model...")
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
             if self.mode == 'train':
                 self.build(feed_previous=False, forward_only=False)
@@ -96,8 +102,8 @@ class BaseModel(object):
         return self.sess.run(self.eval_list, feed_dict=feed_dict)
 
     def train(self, train_data, val_data):
-        assert self.mode == 'train'
         params = self.params
+        assert params.mode == 'train'
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
@@ -157,7 +163,6 @@ class BaseModel(object):
         return loss
 
     def save(self):
-        assert self.mode == 'train'
         print("Saving model to dir %s" % self.save_dir)
         import os
         self.saver.save(self.sess, os.path.join(self.save_dir, 'run'), self.global_step)
@@ -170,9 +175,19 @@ class BaseModel(object):
             sys.exit(0)
         self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
 
-    def save_flags(self):
-        assert self.mode == 'train'
+    def load_expert(self):
         params = self.params
+        expert_params = deepcopy(params)
+        replace_params = {'model': 'EXPERT',
+                          'mode': 'test',
+                          'save_dir': params.expert_dir,
+                          'load_dir': params.expert_dir}
+        expert_params = params._replace(**replace_params)
+        return ExpertModel(expert_params, self.words)
+
+    def save_flags(self):
+        params = self.params
+        assert params.mode == 'train'
         filename = os.path.join(params.save_dir, "params.json")
         save_params = {'memory_step': params.memory_step,
                        'memory_update': params.memory_update,
