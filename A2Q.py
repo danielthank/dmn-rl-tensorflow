@@ -218,27 +218,3 @@ class DMN(GQBaseModel):
             self.fc: fact_counts,
             self.is_training: is_train
         }
-
-    def decode(self, data, outputfile, all=True):
-        tqdm.write("Write decoded output...")
-        num_batches = data.num_batches
-        for _ in range(num_batches):
-            batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, False)
-            outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            for idx in range(len(outputs[0])):
-                pred_q = []
-                for time in outputs:
-                    pred_q.append(self.words.idx2word[np.argmax(time[idx])])
-                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(token+' ' for token in batch[1][idx])
-                ans = batch[2][idx]
-                pred_q = "".join(token+' ' for token in pred_q)
-                outputfile.write("Content: "+content.strip()+'\n')
-                outputfile.write("Question: "+question.strip()+'\n')
-                outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_Q: "+pred_q.strip()+"\n\n")
-            if not all:
-                break
-        data.reset()
-        tqdm.write("Finished")

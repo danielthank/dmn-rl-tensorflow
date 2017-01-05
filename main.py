@@ -14,7 +14,7 @@ flags.DEFINE_string('model', 'Q2A', 'Model type [Q2A]')
 flags.DEFINE_string('mode', 'train', 'train or test or custom[train]')
 flags.DEFINE_string('data_dir', 'babi', 'Data directory [babi]')
 flags.DEFINE_string('save_dir', 'save', 'Save path [save]')
-flags.DEFINE_string('load_dir', 'load', 'Load path [load]')
+flags.DEFINE_string('load_dir', '', 'Load path [load]')
 flags.DEFINE_string('expert_dir', '', 'Expert path []') ## for loading expert in GQ model
 
 # training options
@@ -22,7 +22,6 @@ flags.DEFINE_bool('gpu', True, 'Use GPU? [True]')
 flags.DEFINE_integer('batch_size', 128, 'Batch size during training and testing [128]')
 flags.DEFINE_integer('num_epochs', 256, 'Number of epochs for training [256]')
 flags.DEFINE_float('learning_rate', 0.002, 'Learning rate [0.002]')
-flags.DEFINE_boolean('load', False, 'Start training from saved model? [False]')
 flags.DEFINE_integer('acc_period', 10, 'Training accuracy display period [10]')
 flags.DEFINE_integer('val_period', 40, 'Validation period (for display purpose) [40]')
 flags.DEFINE_integer('save_period', 80, 'Save period [80]') ## not used, use val_period as save_period instead to perform 
@@ -70,7 +69,7 @@ def main(_):
         if tf.gfile.Exists(summary_dir):
             tf.gfile.DeleteRecursively(summary_dir)
         model = Model(FLAGS, words)
-        if FLAGS.load:
+        if not FLAGS.load_dir == '':
             model.load()
 
         model.train(train, val)
@@ -78,7 +77,7 @@ def main(_):
 
     elif FLAGS.mode == 'test':
         model = Model(FLAGS, words)
-        if FLAGS.load:
+        if not FLAGS.load_dir == '':
             model.load()
         else:
             print('Need Loading')

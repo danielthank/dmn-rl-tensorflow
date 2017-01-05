@@ -81,19 +81,21 @@ class BaseModel(object):
     def build(self):
         raise NotImplementedError()
 
-    def decode(self):
-        raise NotImplementedError()
-
     def get_feed_dict(self, batch, is_train):
         raise NotImplementedError()
 
-    def train_batch(self, batch):
-        feed_dict = self.get_feed_dict(batch, is_train=True)
+    def train_batch(self, feed_dict):
         return self.sess.run([self.merged, self.opt_op, self.global_step], feed_dict=feed_dict)
 
-    def test_batch(self, batch):
-        feed_dict = self.get_feed_dict(batch, is_train=False)
+    def test_batch(self, feed_dict):
         return self.sess.run(self.eval_list, feed_dict=feed_dict)
+
+    def reward_batch(self, batch, pred_qs):
+        feed_dict = self.get_feed_dict(batch, is_train=False)
+        feed_dict[self.q] = pred_qs
+        output_probs = self.sess.run(self.output, feed_dict=feed_dict)
+        assert output_probs.shape == (self.params.batch_size, self.words.vocab_size)
+        return np.max(output_probs, axis=1)
 
     def train(self, train_data, val_data):
         assert self.mode == 'train'
@@ -107,7 +109,8 @@ class BaseModel(object):
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch = train_data.next_batch()
-                    summary, _, global_step = self.train_batch(batch)
+                    feed_dict = self.get_feed_dict(batch, is_train=True)
+                    summary, _, global_step = self.train_batch(feed_dict)
 
                 self.summary_writer.add_summary(summary, global_step)
                 train_data.reset()
@@ -141,7 +144,8 @@ class BaseModel(object):
         accs = []
         for _ in range(num_batches):
             batch = data.next_batch()
-            out = self.test_batch(batch)
+            feed_dict = self.get_feed_dict(batch, is_train=False)
+            out = self.test_batch(feed_dict)
             losses.append(out[0])
             global_step = out[1]
             if len(out) == 3:
@@ -184,3 +188,25 @@ class BaseModel(object):
                        'task': params.task}
         with open(filename, 'w') as file:
             json.dump(save_params, file, indent=4)
+
+    def decode(self, data, outputfile, all=True):
+        tqdm.write("Write decoded output...")
+        num_batches = data.num_batches
+        for _ in range(num_batches):
+            batch = data.next_batch()
+            feed_dict = self.get_feed_dict(batch, False)
+            outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            for idx in range(len(outputs)):
+                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(token+' ' for token in batch[1][idx])
+                ans = batch[2][idx]
+                p_ans = self.words.idx2word[np.argmax(outputs[idx])]
+                outputfile.write("Content: "+content.strip()+'\n')
+                outputfile.write("Question: "+question.strip()+'\n')
+                outputfile.write("Ans: "+ans+'\n')
+                outputfile.write("Predict_A: "+p_ans+"\n\n")
+            if not all:
+                break
+        data.reset()
+        tqdm.write("Finished")
+

@@ -67,10 +67,9 @@ class GQBaseModel(object):
                 self.build(feed_previous=True, forward_only=True)
             self.merged = tf.summary.merge_all()
 
-        if hasattr(self, "accuracy"):
-            self.eval_list = [self.total_loss, self.global_step, self.accuracy]
-        else:
-            self.eval_list = [self.total_loss, self.global_step]
+        if self.mode == 'train':
+            self.train_list = [self.merged, self.opt_op, self.global_step] 
+        self.eval_list = [self.total_loss, self.global_step]
 
         self.saver = tf.train.Saver()
         self.sess.run(tf.global_variables_initializer())
@@ -87,18 +86,13 @@ class GQBaseModel(object):
     def build(self):
         raise NotImplementedError()
 
-    def decode(self):
-        raise NotImplementedError()
-
     def get_feed_dict(self, batch, is_train):
         raise NotImplementedError()
 
-    def train_batch(self, batch):
-        feed_dict = self.get_feed_dict(batch, is_train=True)
-        return self.sess.run([self.merged, self.opt_op, self.global_step], feed_dict=feed_dict)
+    def train_batch(self, feed_dict):
+        return self.sess.run(self.train_list, feed_dict=feed_dict)
 
-    def test_batch(self, batch):
-        feed_dict = self.get_feed_dict(batch, is_train=False)
+    def test_batch(self, feed_dict):
         return self.sess.run(self.eval_list, feed_dict=feed_dict)
 
     def train(self, train_data, val_data):
@@ -113,7 +107,8 @@ class GQBaseModel(object):
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch = train_data.next_batch()
-                    summary, _, global_step = self.train_batch(batch)
+                    feed_dict = self.get_feed_dict(batch, is_train=True)
+                    summary, _, global_step = self.train_batch(feed_dict)
 
                 self.summary_writer.add_summary(summary, global_step)
                 train_data.reset()
@@ -144,22 +139,16 @@ class GQBaseModel(object):
     def eval(self, data, name):
         num_batches = data.num_batches
         losses = []
-        accs = []
         for _ in range(num_batches):
             batch = data.next_batch()
-            out = self.test_batch(batch)
-            losses.append(out[0])
-            global_step = out[1]
-            if len(out) == 3:
-                accs.append(out[2])
+            feed_dict = self.get_feed_dict(batch, is_train=False)
+            batch_loss, step = self.test_batch(feed_dict)
+            losses.append(batch_loss)
+            global_step = step
         data.reset()
         loss = np.mean(losses)
-        if len(accs) == 0:
-            acc = 0.
-        else:
-            acc = np.mean(accs)
-        tqdm.write("[%s] step %d, Loss = %.4f, Acc = %.4f" % \
-              (name, global_step, loss, acc))
+        tqdm.write("[%s] step %d, Loss = %.4f" % \
+              (name, global_step, loss))
         return loss
 
     def save(self):
@@ -199,3 +188,34 @@ class GQBaseModel(object):
                        'task': params.task}
         with open(filename, 'w') as file:
             json.dump(save_params, file, indent=4)
+
+    def ask_expert(self, batch, pred_qs):
+        return self.expert.reward_batch(batch, pred_qs)
+
+    def decode(self, data, outputfile, all=True):
+        tqdm.write("Write decoded output...")
+        num_batches = data.num_batches
+        for _ in range(num_batches):
+            batch = data.next_batch()
+            feed_dict = self.get_feed_dict(batch, False)
+            outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            outputs = np.argmax(np.stack(outputs, axis=1), axis=2)
+            expert_results = self.ask_expert(batch, outputs)
+            for idx, output in enumerate(outputs):
+                pred_q = []
+                for time in output:
+                    pred_q.append(self.words.idx2word[time])
+                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(token+' ' for token in batch[1][idx])
+                ans = batch[2][idx]
+                pred_q = "".join(token+' ' for token in pred_q)
+                result = expert_results[idx]
+                outputfile.write("Content: "+content.strip()+'\n')
+                outputfile.write("Question: "+question.strip()+'\n')
+                outputfile.write("Ans: "+ans+'\n')
+                outputfile.write("Predict_Q: "+pred_q.strip()+"\n")
+                outputfile.write("Expert Result: "+str(result)+"\n\n")
+            if not all:
+                break
+        data.reset()
+        tqdm.write("Finished")

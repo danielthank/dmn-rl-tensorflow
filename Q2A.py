@@ -148,7 +148,7 @@ class DMN(BaseModel):
         self.is_training = is_training
 
         # tensors
-        self.output = logits
+        self.output = tf.nn.softmax(logits)
         self.total_loss = total_loss
         self.num_corrects = num_corrects
         self.accuracy = accuracy
@@ -206,26 +206,3 @@ class DMN(BaseModel):
             self.fc: fact_counts,
             self.is_training: is_train
         }
-
-    def decode(self, data, outputfile, all=True):
-        tqdm.write("Write decoded output...")
-        num_batches = data.num_batches
-        for _ in range(num_batches):
-            batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, False)
-            outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            for idx in range(len(outputs)):
-                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(token+' ' for token in batch[1][idx])
-                ans = batch[2][idx]
-                p_ans = self.words.idx2word[np.argmax(outputs[idx])]
-                outputfile.write("Content: "+content.strip()+'\n')
-                outputfile.write("Question: "+question.strip()+'\n')
-                outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_A: "+p_ans+"\n\n")
-            if not all:
-                break
-        data.reset()
-        tqdm.write("Finished")
-
-    def aaa(self, feed_dict):
