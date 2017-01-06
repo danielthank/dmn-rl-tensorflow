@@ -3,20 +3,21 @@ import tensorflow as tf
 
 from functools import partial
 
-from Q2A.entity_networks.activations import prelu
-from Q2A.entity_networks.dynamic_memory_cell import DynamicMemoryCell
-from Q2A.entity_networks.model_utils import get_sequence_length
+from Q2A.base_model import BaseModel
+from ren_helper.activations import prelu
+from ren_helper.dynamic_memory_cell import DynamicMemoryCell
+from ren_helper.model_utils import get_sequence_length
 
 class REN(BaseModel):
     def build(self, feed_previous, forward_only):
         params = self.params
-        batch_size, sentence_size, question_size, story_size = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
-        embedding_size, vocab_size = params.embed_size, self.words.vocab_size
-        num_blocks = params.num_blocks
+        batch_size, sentence_size, question_size, story_size = params.batch_size, params.batch_size, params.question_size, params.story_size
+        embedding_size, vocab_size = params.ren_embedding_size, self.words.vocab_size
+        num_blocks = params.ren_num_blocks
 
         # initialize self
         # placeholders
-        story = tf.placeholder('int32', shape=[batch_size, story_size, sent_size], name='x')  # [num_batch, fact_count, sentence_len]
+        story = tf.placeholder('int32', shape=[batch_size, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
         question = tf.placeholder('int32', shape=[batch_size, question_size], name='q')  # [num_batch, question_len]
         answer = tf.placeholder('int32', shape=[batch_size], name='y')  # [num_batch] - one word answer
         fact_counts = tf.placeholder('int64', shape=[batch_size], name='fc')
@@ -27,7 +28,7 @@ class REN(BaseModel):
         ones_initializer = tf.constant_initializer(1.0)
         activation = partial(prelu, initializer=ones_initializer)
 
-        with tf.variable_scope(scope, 'EntityNetwork', initializer=normal_initializer):
+        with tf.variable_scope('EntityNetwork', initializer=normal_initializer):
             # Embeddings
             # The embedding mask forces the special "pad" embedding to zeros.
             embedding_params = tf.get_variable('embedding_params', [vocab_size, embedding_size])

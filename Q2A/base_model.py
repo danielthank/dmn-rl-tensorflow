@@ -177,6 +177,7 @@ class BaseModel(object):
         assert self.mode == 'train'
         params = self.params
         filename = os.path.join(params.dir, "params.json")
+        """
         save_params = {'memory_step': params.memory_step,
                        'memory_update': params.memory_update,
                        'embed_size': params.embed_size,
@@ -185,8 +186,9 @@ class BaseModel(object):
                        'keep_prob': params.keep_prob,
                        'batch_norm': params.batch_norm,
                        'task': params.task}
+        """
         with open(filename, 'w') as file:
-            json.dump(save_params, file, indent=4)
+            json.dump(vars(params), file, indent=4)
 
     def decode(self, data, outputfile, all=True):
         tqdm.write("Write decoded output...")
