@@ -10,20 +10,20 @@ from data_helper.data_utils import WordTable
 
 parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
-# Action and arch and task
+# Action and target and arch
 parser.add_argument('action', choices=['train', 'test', 'rl'])
 parser.add_argument('target', choices=['expert', 'learner', 'xxx'])
-parser.add_argument('arch', choises=['dmn', 'seq2seq', 'ren', 'xxx'])
+parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren', 'xxx'])
 
 # directory
-parser.add_argument('--data_dir', default='babi')
 parser.add_argument('--expert_dir', default='')
 parser.add_argument('--learner_dir', default='')
 
 # training options
 parser.add_argument('--task', default=1, type=int, choices=range(1, 21))
 parser.add_argument('--batch_size', default=128, type=int)
-parser.add_argument('--num_epochs', default=0.002, type=float)
+parser.add_argument('--num_epochs', default=256, type=int)
+parser.add_argument('--learning_rate', default=0.002, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
 parser.add_argument('--acc_period', default=10, type=int)
 parser.add_argument('--val_period', default=40, type=int)
@@ -46,7 +46,7 @@ parser.add_argument('--ren_num_blocks', default=20, type=int)
 args = parser.parse_args()
 
 def main(_):
-    load = (args.target == 'xxx' and args.arch == 'xxx') 
+    load = (args.target == 'xxx' and args.arch == 'xxx')
     if args.target == 'expert':
         if load:
             if args.expert_dir == '':
@@ -55,10 +55,10 @@ def main(_):
                 raise Exception('expert_dir not exists')
             dir = args.expert_dir
         else:
-            dir = os.path.join('save', {}_{}_{}.format(args.target, args.arch, args.task))
+            dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
             if not os.path.exists(dir):
                 os.makedirs(dir, exist_ok=True)
-    else if args.target == 'learner':
+    elif args.target == 'learner':
         if load:
             if args.leaner_dir == '':
                 raise Exception('leaner_dir not specified')
@@ -66,7 +66,7 @@ def main(_):
                 raise Exception('leaner_dir not exists')
             dir = args.learner_dir
         else:
-            dir = os.path.join('save', {}_{}_{}.format(args.target, args.arch, args.task))
+            dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
             if not os.path.exists(dir):
                 os.makedirs(dir, exist_ok=True)
     args.load = load;
@@ -84,8 +84,8 @@ def main(_):
         raise Exception('Unsupported model!')
 
     words = WordTable()
-    train = read_babi(os.path.join('save', 'train'), args.task, 'train', args.batch_size, words)
-    test = read_babi(os.path.join('save', 'test'), args.task, 'test', args.batch_size, words)
+    train = read_babi(os.path.join('babi', 'train'), args.task, 'train', args.batch_size, words)
+    test = read_babi(os.path.join('babi', 'test'), args.task, 'test', args.batch_size, words)
     val = train.split_dataset(args.val_ratio)
     args.sentence_size, args.question_size, args.story_size = get_max_sizes(train, test, val)
 
@@ -94,16 +94,16 @@ def main(_):
         if tf.gfile.Exists(summary_dir):
             tf.gfile.DeleteRecursively(summary_dir)
 
-        model = Model(args, words)
-        if args.load: model.load()
-        model.train(train, val)
-        model.save_flags()
+        main_model = MainModel(args, words)
+        if args.load: main_model.load()
+        main_model.train(train, val)
+        main_model.save_flags()
 
     elif args.action == 'test':
-        model = Model(args, words)
-        model.load()
-        model.eval(test, name='Test')
-        model.decode(test, sys.stdout, all=False)
+        main_model = MainModel(args, words)
+        main_model.load()
+        main_model.eval(test, name='Test')
+        main_model.decode(test, sys.stdout, all=False)
     
     elif args.action == 'rl':
         pass

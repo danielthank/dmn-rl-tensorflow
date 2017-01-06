@@ -40,11 +40,12 @@ def flags2params(flags):
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
     def __init__(self, flags, words):
-        self.params = flags2params(flags)
+        # self.params = flags2params(flags)
+        self.params = flags;
         self.words = words
-        self.mode = self.params.mode
+        self.mode = self.params.action
         if self.mode == 'test':
-            params_filename = os.path.join(self.params.save_dir, 'params.json')
+            params_filename = os.path.join(self.params.dir, 'params.json')
             load_params = load_flags(params_filename)
             if not load_params['task'] == self.params.task:
                 raise Exception("incompatible task!")
@@ -68,10 +69,8 @@ class BaseModel(object):
 
         self.saver = tf.train.Saver()
         self.sess.run(tf.global_variables_initializer())
-        self.load_dir = self.params.load_dir
         if self.mode == 'train':
-            self.save_dir = self.params.save_dir
-            summary_dir = os.path.join(self.save_dir, "summary")
+            summary_dir = os.path.join(self.params.dir, "summary")
             self.summary_writer = tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph)
     
     def __del__(self):
@@ -162,13 +161,13 @@ class BaseModel(object):
 
     def save(self):
         assert self.mode == 'train'
-        print("Saving model to dir %s" % self.save_dir)
+        print("Saving model to dir %s" % self.params.dir)
         import os
-        self.saver.save(self.sess, os.path.join(self.save_dir, 'run'), self.global_step)
+        self.saver.save(self.sess, os.path.join(self.params.dir, 'run'), self.global_step)
 
     def load(self):
         print("Loading model ...")
-        checkpoint = tf.train.get_checkpoint_state(self.load_dir)
+        checkpoint = tf.train.get_checkpoint_state(self.params.dir)
         if checkpoint is None:
             print("Error: No saved model found. Please train first.")
             sys.exit(0)
@@ -177,7 +176,7 @@ class BaseModel(object):
     def save_flags(self):
         assert self.mode == 'train'
         params = self.params
-        filename = os.path.join(params.save_dir, "params.json")
+        filename = os.path.join(params.dir, "params.json")
         save_params = {'memory_step': params.memory_step,
                        'memory_update': params.memory_update,
                        'embed_size': params.embed_size,
