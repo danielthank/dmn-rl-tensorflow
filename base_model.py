@@ -93,11 +93,12 @@ class BaseModel(object):
     def test_batch(self, feed_dict):
         return self.sess.run(self.eval_list, feed_dict=feed_dict)
 
-    def reward_batch(self, batch, pred_qs):
+    def output_by_question(self, batch, pred_qs):
         feed_dict = self.get_feed_dict(batch, is_train=False)
         feed_dict[self.q] = pred_qs
         output_probs = self.sess.run(self.output, feed_dict=feed_dict)
         assert output_probs.shape == (self.params.batch_size, self.words.vocab_size)
+        return output_probs
         return np.max(output_probs, axis=1), np.argmax(output_probs, axis=1)
 
     def train(self, train_data, val_data):

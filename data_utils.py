@@ -60,11 +60,14 @@ class WordTable:
     def __init__(self, word2vec=None, embed_size=0):
         self.word2vec = word2vec
         self.word2idx = {}
+        self.word2dc = {}
+        self.all_doc_count = 0.
         self.idx2word = ['<eos>', '<go>']  # zero padding will be <eos>
         self.embed_size = embed_size
 
     def add_vocab(self, *words):
         """ Add vocabularies to dictionary. """
+        seen_words = []
         for word in words:
             if self.word2vec and word not in self.word2vec:
                 self._create_vector(word)
@@ -72,7 +75,11 @@ class WordTable:
             if word not in self.word2idx:
                 index = len(self.idx2word)
                 self.word2idx[word] = index
+                self.word2dc[word] = 1.
                 self.idx2word.append(word)
+            elif not word in seen_words:
+                self.word2dc[word] += 1.
+        self.all_doc_count += 1.
 
     def vectorize(self, word):
         """ Converts word to vector.
@@ -88,13 +95,14 @@ class WordTable:
         self.word2vec[word] = vector
         print("create_vector => %s is missing" % word)
         return vector
-
+    """
     def word_to_index(self, word):
         self.add_vocab(word)
         return self.word2idx[word]
 
     def index_to_word(self, index):
         return self.idx2word[index]
+    """
 
     @property
     def vocab_size(self):

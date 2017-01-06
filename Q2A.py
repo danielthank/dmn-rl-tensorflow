@@ -130,7 +130,7 @@ class DMN(BaseModel):
                                                      self.global_step,
                                                      learning_rate=params.learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
+                                                     clip_gradients=1.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
             """

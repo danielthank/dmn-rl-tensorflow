@@ -117,8 +117,8 @@ class DMN(GQBaseModel):
             ## decoder loop function ##
             def _loop_fn(prev, i):
                 prev = tf.matmul(prev, proj_w) + proj_b
-                #prev_symbol = tf.argmax(prev, 1)
-                prev_symbol = gumbel_softmax(prev, axis=1)
+                prev_symbol = tf.argmax(prev, 1)
+                #prev_symbol = gumbel_softmax(prev, axis=1)
                 emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
                 return tf.concat(1, [emb_prev, memory])
             ## decoder ##

@@ -95,6 +95,11 @@ class GQBaseModel(object):
     def get_feed_dict(self, batch, is_train):
         raise NotImplementedError()
 
+    def get_question(self, feed_dict):
+        outputs = self.sess.run(self.output, feed_dict=feed_dict)
+        outputs = np.argmax(np.stack(outputs, axis=1), axis=2)
+        return outputs
+
     def train_batch(self, feed_dict):
         return self.sess.run(self.train_list, feed_dict=feed_dict)
 
@@ -195,7 +200,10 @@ class GQBaseModel(object):
             json.dump(save_params, file, indent=4)
 
     def ask_expert(self, batch, pred_qs):
-        return self.expert.reward_batch(batch, pred_qs)
+        output_probs = self.expert.output_by_question(batch, pred_qs)
+        max_index = np.argmax(output_probs, axis=1)
+        inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
+        return inverse_entropy, max_index
 
     def decode(self, data, outputfile, all=True):
         tqdm.write("Write decoded output...")
@@ -203,9 +211,8 @@ class GQBaseModel(object):
         for _ in range(num_batches):
             batch = data.next_batch()
             feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
-            outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            outputs = np.argmax(np.stack(outputs, axis=1), axis=2)
-            expert_probs, expert_anses = self.ask_expert(batch, outputs)
+            outputs = self.get_question(feed_dict)
+            expert_entropys, expert_anses = self.ask_expert(batch, outputs)
             for idx, output in enumerate(outputs):
                 pred_q = []
                 for time in output:
@@ -214,13 +221,13 @@ class GQBaseModel(object):
                 question = "".join(token+' ' for token in batch[1][idx])
                 ans = batch[2][idx]
                 pred_q = "".join(token+' ' for token in pred_q)
-                expert_prob = expert_probs[idx]
+                expert_entropy = expert_entropys[idx]
                 expert_ans = self.words.idx2word[expert_anses[idx]]
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
                 outputfile.write("Ans: "+ans+'\n')
                 outputfile.write("Predict_Q: "+pred_q.strip()+"\n")
-                outputfile.write("Expert Result: "+str(expert_prob)+"\t"+expert_ans+"\n\n")
+                outputfile.write("Expert Result: "+str(expert_entropy)+"\t"+expert_ans+"\n\n")
             if not all:
                 break
         data.reset()
