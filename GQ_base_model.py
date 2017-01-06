@@ -42,8 +42,11 @@ def flags2params(flags):
 class GQBaseModel(object):
     """ Code from mem2nn-tensorflow. """
     def __init__(self, flags, words):
-        self.params = flags2params(flags)
+        ## words ##
         self.words = words
+
+        ## set params ##
+        self.params = flags2params(flags)
         self.mode = self.params.mode
         if self.mode == 'test':
             params_filename = os.path.join(self.params.save_dir, 'params.json')
@@ -52,25 +55,28 @@ class GQBaseModel(object):
                 raise Exception("incompatible task!")
             self.params = self.params._replace(**load_params)
 
+        ## load expert ##
         print("Loading Expert...")
         self.expert = self.load_expert()
         self.expert.load()
 
+        ## build model graph ##
         self.sess = tf.Session()
         default_init = xavier_initializer()
         with tf.variable_scope('GQ', initializer=default_init):
             print("Building GQ model...")
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
             if self.mode == 'train':
-                self.build(feed_previous=False, forward_only=False)
+                self.build(forward_only=False)
             elif self.mode == 'test':
-                self.build(feed_previous=True, forward_only=True)
+                self.build(forward_only=True)
             self.merged = tf.summary.merge_all()
 
-        if self.mode == 'train':
-            self.train_list = [self.merged, self.opt_op, self.global_step] 
+        ## train & eval run output ##
+        self.train_list = [self.merged, self.opt_op, self.global_step] 
         self.eval_list = [self.total_loss, self.global_step]
 
+        ## init saver, summary writer, and model variables ##
         self.saver = tf.train.Saver()
         self.sess.run(tf.global_variables_initializer())
         self.load_dir = self.params.load_dir
@@ -107,7 +113,7 @@ class GQBaseModel(object):
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch = train_data.next_batch()
-                    feed_dict = self.get_feed_dict(batch, is_train=True)
+                    feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=True)
                     summary, _, global_step = self.train_batch(feed_dict)
 
                 self.summary_writer.add_summary(summary, global_step)
@@ -141,10 +147,9 @@ class GQBaseModel(object):
         losses = []
         for _ in range(num_batches):
             batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, is_train=False)
-            batch_loss, step = self.test_batch(feed_dict)
+            feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
+            batch_loss, global_step = self.test_batch(feed_dict)
             losses.append(batch_loss)
-            global_step = step
         data.reset()
         loss = np.mean(losses)
         tqdm.write("[%s] step %d, Loss = %.4f" % \
@@ -197,10 +202,10 @@ class GQBaseModel(object):
         num_batches = data.num_batches
         for _ in range(num_batches):
             batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, False)
+            feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
             outputs = self.sess.run(self.output, feed_dict=feed_dict)
             outputs = np.argmax(np.stack(outputs, axis=1), axis=2)
-            expert_results = self.ask_expert(batch, outputs)
+            expert_probs, expert_anses = self.ask_expert(batch, outputs)
             for idx, output in enumerate(outputs):
                 pred_q = []
                 for time in output:
@@ -209,12 +214,13 @@ class GQBaseModel(object):
                 question = "".join(token+' ' for token in batch[1][idx])
                 ans = batch[2][idx]
                 pred_q = "".join(token+' ' for token in pred_q)
-                result = expert_results[idx]
+                expert_prob = expert_probs[idx]
+                expert_ans = self.words.idx2word[expert_anses[idx]]
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
                 outputfile.write("Ans: "+ans+'\n')
                 outputfile.write("Predict_Q: "+pred_q.strip()+"\n")
-                outputfile.write("Expert Result: "+str(result)+"\n\n")
+                outputfile.write("Expert Result: "+str(expert_prob)+"\t"+expert_ans+"\n\n")
             if not all:
                 break
         data.reset()

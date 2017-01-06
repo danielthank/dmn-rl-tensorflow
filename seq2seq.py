@@ -7,11 +7,11 @@ from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
 from GQ_base_model import GQBaseModel
 from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm, variable_summary
+from nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
 
 
 class Seq2Seq(GQBaseModel):
-    def build(self, feed_previous, forward_only):
+    def build(self, forward_only):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -24,6 +24,7 @@ class Seq2Seq(GQBaseModel):
         fact_counts = tf.placeholder('int64', shape=[N], name='fc')
         input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
         is_training = tf.placeholder(tf.bool)
+        feed_previous = tf.placeholder(tf.bool)
 
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
@@ -111,37 +112,48 @@ class Seq2Seq(GQBaseModel):
         """
 
         with tf.variable_scope('Question') as scope:
+            ## output projection weight ##
             proj_w = weight('proj_w', [d, A])
             proj_b = bias('proj_b', A)
+            ## build decoder inputs ##
             go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
             decoder_inputs = tf.concat(1, [go_pad, question])
             decoder_inputs = tf.nn.embedding_lookup(embedding, decoder_inputs) # [N, Q+1, V]
             decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, N, V]
             decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [N, V]
+            ## question module rnn cell ##
             q_cell = rnn_cell.GRUCell(d)
+            ## decoder state init ##
             #q_init_state = q_cell.zero_state(batch_size=N, dtype=tf.float32)
             #q_init_state = fw[0] + bw[0]
             q_init_state = forward_state
-            if feed_previous:
-                def _loop_fn(prev, i):
-                    prev = tf.matmul(prev, proj_w) + proj_b
-                    prev_symbol = tf.argmax(prev, 1)
-                    now_input = tf.nn.embedding_lookup(embedding, prev_symbol);
-                    return now_input
-                loop_function = _loop_fn
-            else:
-                loop_function = None
-            q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
-                                                     initial_state=q_init_state,
-                                                     cell=q_cell,
-                                                     loop_function=loop_function)
-            """
-            q_outputs, _ = tf.nn.seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
-                                                           initial_state=q_init_state,
-                                                           attention_states=f_outputs,
-                                                           cell=q_cell,
-                                                           loop_function=loop_function)
-            """
+            ## decoder loop function ##
+            def _loop_fn(prev, i):
+                prev = tf.matmul(prev, proj_w) + proj_b
+                #prev_symbol = tf.argmax(prev, 1)
+                prev_symbol = gumbel_softmax(prev, axis=1)
+                now_input = tf.nn.embedding_lookup(embedding, prev_symbol)
+                return now_input
+            ## decoder ##
+            def decoder(feed_previous_bool):
+                loop_function = _loop_fn if feed_previous_bool else None
+                reuse = None if feed_previous_bool else True
+                with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
+                    q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                                                             initial_state=q_init_state,
+                                                             cell=q_cell,
+                                                             loop_function=loop_function)
+                    """
+                    q_outputs, _ = tf.nn.seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
+                                                                   initial_state=q_init_state,
+                                                                   attention_states=f_outputs,
+                                                                   cell=q_cell,
+                                                                   loop_function=loop_function)
+                    """
+                    return q_outputs
+            q_outputs = tf.cond(feed_previous,
+                                lambda: decoder(True),
+                                lambda: decoder(False))
             q_outputs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
@@ -154,27 +166,28 @@ class Seq2Seq(GQBaseModel):
             total_loss = loss + params.weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Training
-        def learning_rate_decay_fn(lr, global_step):
-            return tf.train.exponential_decay(lr,
-                                              global_step,
-                                              decay_steps=5000,
-                                              decay_rate=0.5,
-                                              staircase=True)
-        OPTIMIZER_SUMMARIES = ["learning_rate",
-                               "loss",
-                               "gradients",
-                               "gradient_norm"]
-        opt_op = tf.contrib.layers.optimize_loss(total_loss,
-                                                 self.global_step,
-                                                 learning_rate=params.learning_rate,
-                                                 optimizer=tf.train.AdamOptimizer,
-                                                 clip_gradients=5.,
-                                                 learning_rate_decay_fn=learning_rate_decay_fn,
-                                                 summaries=OPTIMIZER_SUMMARIES)
-        """
-        optimizer = tf.train.AdamOptimizer(params.learning_rate)
-        opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
-        """
+        if not forward_only:
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=5000,
+                                                  decay_rate=0.5,
+                                                  staircase=True)
+            OPTIMIZER_SUMMARIES = ["learning_rate",
+                                   "loss",
+                                   "gradients",
+                                   "gradient_norm"]
+            opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                                                     self.global_step,
+                                                     learning_rate=params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=5.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn,
+                                                     summaries=OPTIMIZER_SUMMARIES)
+            """
+            optimizer = tf.train.AdamOptimizer(params.learning_rate)
+            opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
+            """
 
         # placeholders
         self.x = input
@@ -183,11 +196,15 @@ class Seq2Seq(GQBaseModel):
         self.y = answer
         self.fc = fact_counts
         self.is_training = is_training
+        self.feed_previous = feed_previous
 
         # tensors
         self.total_loss = total_loss
         self.output = q_outputs
-        self.opt_op = opt_op
+        if not forward_only:
+            self.opt_op = opt_op
+        else:
+            self.opt_op = None
 
     def positional_encoding(self):
         V, L = self.params.embed_size, self.params.max_sent_size
@@ -230,7 +247,7 @@ class Seq2Seq(GQBaseModel):
 
         return new_input, new_question, new_labels, fact_counts, input_masks
 
-    def get_feed_dict(self, batches, is_train):
+    def get_feed_dict(self, batches, feed_previous, is_train):
         input, question, label, fact_counts, mask = self.preprocess_batch(batches)
         return {
             self.x: input,
@@ -238,5 +255,6 @@ class Seq2Seq(GQBaseModel):
             self.q: question,
             self.y: label,
             self.fc: fact_counts,
-            self.is_training: is_train
+            self.is_training: is_train,
+            self.feed_previous: feed_previous
         }

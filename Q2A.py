@@ -11,7 +11,7 @@ from nn import weight, bias, dropout, batch_norm, variable_summary
 class DMN(BaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
-    def build(self, feed_previous, forward_only):
+    def build(self, forward_only):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -130,7 +130,7 @@ class DMN(BaseModel):
                                                      self.global_step,
                                                      learning_rate=params.learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=10.,
+                                                     clip_gradients=5.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
             """
@@ -154,6 +154,8 @@ class DMN(BaseModel):
         self.accuracy = accuracy
         if not forward_only:
             self.opt_op = opt_op
+        else:
+            self.opt_op = None
 
     def positional_encoding(self):
         V, L = self.params.embed_size, self.params.max_sent_size

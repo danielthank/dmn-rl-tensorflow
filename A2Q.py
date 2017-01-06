@@ -5,13 +5,13 @@ from tensorflow.python.ops import rnn_cell
 
 from GQ_base_model import GQBaseModel
 from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm, variable_summary
+from nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
 
 
 class DMN(GQBaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
-    def build(self, feed_previous, forward_only):
+    def build(self, forward_only):
         params = self.params
         N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
         V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
@@ -24,6 +24,7 @@ class DMN(GQBaseModel):
         fact_counts = tf.placeholder('int64', shape=[N], name='fc')
         input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
         is_training = tf.placeholder(tf.bool)
+        feed_previous = tf.placeholder(tf.bool)
 
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
@@ -99,29 +100,40 @@ class DMN(GQBaseModel):
             memory = dropout(memory, params.keep_prob, is_training)
 
         with tf.variable_scope('Question') as scope:
+            ## output projection weight ##
             proj_w = weight('proj_w', [d, A])
             proj_b = bias('proj_b', A)
+            ## build decoder inputs ##
             go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
             decoder_inputs = tf.concat(1, [go_pad, question])
             decoder_inputs = tf.nn.embedding_lookup(embedding, decoder_inputs) # [N, Q+1, V]
             decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, N, V]
             decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [N, V]
             decoder_inputs = [tf.concat(1, [de_inp, memory]) for de_inp in decoder_inputs]
-            q_cell = rnn_cell.GRUCell(d);
+            ## question module rnn cell ##
+            q_cell = rnn_cell.GRUCell(d)
+            ## decoder state init ##
             q_init_state = memory
-            if feed_previous:
-                def _loop_fn(prev, i):
-                    prev = tf.matmul(prev, proj_w) + proj_b
-                    prev_symbol = tf.argmax(prev, 1)
-                    emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol);
-                    return tf.concat(1, [emb_prev, memory])
-                loop_function = _loop_fn
-            else:
-                loop_function = None
-            q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
-                                                     initial_state=q_init_state,
-                                                     cell=q_cell,
-                                                     loop_function=loop_function)
+            ## decoder loop function ##
+            def _loop_fn(prev, i):
+                prev = tf.matmul(prev, proj_w) + proj_b
+                #prev_symbol = tf.argmax(prev, 1)
+                prev_symbol = gumbel_softmax(prev, axis=1)
+                emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
+                return tf.concat(1, [emb_prev, memory])
+            ## decoder ##
+            def decoder(feed_previous_bool):
+                loop_function = _loop_fn if feed_previous_bool else None
+                reuse = None if feed_previous_bool else True
+                with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
+                    q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                                                             initial_state=q_init_state,
+                                                             cell=q_cell,
+                                                             loop_function=loop_function)
+                    return q_outputs
+            q_outputs = tf.cond(feed_previous,
+                                lambda: decoder(True),
+                                lambda: decoder(False))
             q_outputs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
@@ -160,12 +172,15 @@ class DMN(GQBaseModel):
         self.y = answer
         self.fc = fact_counts
         self.is_training = is_training
+        self.feed_previous = feed_previous
 
         # tensors
         self.total_loss = total_loss
         self.output = q_outputs
         if not forward_only:
             self.opt_op = opt_op
+        else:
+            self.opt_op = None
 
     def positional_encoding(self):
         V, L = self.params.embed_size, self.params.max_sent_size
@@ -208,7 +223,7 @@ class DMN(GQBaseModel):
 
         return new_input, new_question, new_labels, fact_counts, input_masks
 
-    def get_feed_dict(self, batches, is_train):
+    def get_feed_dict(self, batches, feed_previous, is_train):
         input, question, label, fact_counts, mask = self.preprocess_batch(batches)
         return {
             self.x: input,
@@ -216,5 +231,6 @@ class DMN(GQBaseModel):
             self.q: question,
             self.y: label,
             self.fc: fact_counts,
-            self.is_training: is_train
+            self.is_training: is_train,
+            self.feed_previous: feed_previous
         }

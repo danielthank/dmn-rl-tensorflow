@@ -40,8 +40,10 @@ def flags2params(flags):
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
     def __init__(self, flags, words):
-        self.params = flags2params(flags)
+        ## words ##
         self.words = words
+        ## set params ##
+        self.params = flags2params(flags)
         self.mode = self.params.mode
         if self.mode == 'test':
             params_filename = os.path.join(self.params.save_dir, 'params.json')
@@ -50,22 +52,23 @@ class BaseModel(object):
                 raise Exception("incompatible task!")
             self.params = self.params._replace(**load_params)
 
+        ## build graph ##
         self.sess = tf.Session()
         default_init = xavier_initializer()
         with tf.variable_scope('DMN', initializer=default_init):
             print("Building DMN...")
             self.global_step = tf.Variable(0, name='global_step', trainable=False)
             if self.mode == 'train':
-                self.build(feed_previous=False, forward_only=False)
+                self.build(forward_only=False)
             elif self.mode == 'test':
-                self.build(feed_previous=True, forward_only=True)
+                self.build(forward_only=True)
             self.merged = tf.summary.merge_all()
 
-        if hasattr(self, "accuracy"):
-            self.eval_list = [self.total_loss, self.global_step, self.accuracy]
-        else:
-            self.eval_list = [self.total_loss, self.global_step]
+        ## train & eval run output ##
+        self.train_list = [self.merged, self.opt_op, self.global_step] 
+        self.eval_list = [self.total_loss, self.global_step, self.accuracy]
 
+        ## init saver, summary writer and model variables ##
         self.saver = tf.train.Saver()
         self.sess.run(tf.global_variables_initializer())
         self.load_dir = self.params.load_dir
@@ -95,7 +98,7 @@ class BaseModel(object):
         feed_dict[self.q] = pred_qs
         output_probs = self.sess.run(self.output, feed_dict=feed_dict)
         assert output_probs.shape == (self.params.batch_size, self.words.vocab_size)
-        return np.max(output_probs, axis=1)
+        return np.max(output_probs, axis=1), np.argmax(output_probs, axis=1)
 
     def train(self, train_data, val_data):
         assert self.mode == 'train'
@@ -145,17 +148,12 @@ class BaseModel(object):
         for _ in range(num_batches):
             batch = data.next_batch()
             feed_dict = self.get_feed_dict(batch, is_train=False)
-            out = self.test_batch(feed_dict)
-            losses.append(out[0])
-            global_step = out[1]
-            if len(out) == 3:
-                accs.append(out[2])
+            batch_loss, global_step, batch_acc = self.test_batch(feed_dict)
+            losses.append(batch_loss)
+            accs.append(batch_acc)
         data.reset()
         loss = np.mean(losses)
-        if len(accs) == 0:
-            acc = 0.
-        else:
-            acc = np.mean(accs)
+        acc = np.mean(accs)
         tqdm.write("[%s] step %d, Loss = %.4f, Acc = %.4f" % \
               (name, global_step, loss, acc))
         return loss
@@ -194,7 +192,7 @@ class BaseModel(object):
         num_batches = data.num_batches
         for _ in range(num_batches):
             batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, False)
+            feed_dict = self.get_feed_dict(batch, is_train=False)
             outputs = self.sess.run(self.output, feed_dict=feed_dict)
             for idx in range(len(outputs)):
                 content = "".join(token+' ' for sent in batch[0][idx] for token in sent)

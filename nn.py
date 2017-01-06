@@ -123,3 +123,24 @@ def fully_connected(input, num_neurons, name, is_training):
     l = batch_norm(l, is_training)
     return tf.nn.relu(l)
 
+def sample_gumbel(shape, eps=1e-20): 
+    """Sample from Gumbel(0, 1)"""
+    U = tf.random_uniform(shape,minval=0,maxval=1)
+    return -tf.log(-tf.log(U + eps) + eps)
+
+def gumbel_softmax_sample(logits, temperature): 
+    """ Draw a sample from the Gumbel-Softmax distribution"""
+    y = logits + sample_gumbel(tf.shape(logits))
+    return tf.nn.softmax( y / temperature)
+
+def gumbel_softmax(logits, axis, temperature=1.0):
+    """Sample from the Gumbel-Softmax distribution and optionally discretize.
+    Args:
+        logits: [batch_size, n_class] unnormalized log-probs
+        temperature: non-negative scalar, default to 1.0
+    Returns:
+        [batch_size] index sample from the Gumbel-Softmax distribution.
+    """
+    y = gumbel_softmax_sample(logits, temperature)
+    max_index = tf.argmax(y, axis=axis)
+    return max_index
