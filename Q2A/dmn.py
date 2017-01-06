@@ -3,9 +3,9 @@ import tensorflow as tf
 from tqdm import tqdm
 from tensorflow.python.ops import rnn_cell
 
-from base_model import BaseModel
-from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm, variable_summary
+from Q2A.base_model import BaseModel
+from dmn_helper.episode_module import EpisodeModule
+from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary
 
 
 class DMN(BaseModel):
@@ -13,8 +13,8 @@ class DMN(BaseModel):
         Improved End-To-End version."""
     def build(self, forward_only):
         params = self.params
-        N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
-        V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
+        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
 
         # initialize self
         # placeholders
@@ -43,7 +43,7 @@ class DMN(BaseModel):
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
 
         # dropout time
-        facts = dropout(facts, params.keep_prob, is_training)
+        facts = dropout(facts, params.dmn_keep_prob, is_training)
 
         with tf.name_scope('InputFusion'):
             # Bidirectional RNN
@@ -68,12 +68,12 @@ class DMN(BaseModel):
 
         # Episodic Memory
         with tf.variable_scope('Episodic'):
-            episode = EpisodeModule(d, question_vec, facts, is_training, params.batch_norm)
+            episode = EpisodeModule(d, question_vec, facts, is_training, params.dmn_batch_norm)
             memory = tf.identity(question_vec) # [N, d]
 
-            for t in range(params.memory_step):
+            for t in range(params.dmn_memory_step):
                 with tf.variable_scope('Layer%d' % t) as scope:
-                    if params.memory_update == 'gru':
+                    if params.dmn_memory_update == 'gru':
                         memory = gru(episode.new(memory), memory)[0]
                     else:
                         # ReLU update
@@ -82,7 +82,7 @@ class DMN(BaseModel):
 
                         w_t = weight('w_t', [3 * d, d])
                         z = tf.matmul(concated, w_t)
-                        if params.batch_norm:
+                        if params.dmn_batch_norm:
                             z = batch_norm(z, is_training)
                         else:
                             b_t = bias('b_t', d)
@@ -92,9 +92,9 @@ class DMN(BaseModel):
                     scope.reuse_variables()
 
         # Regularizations
-        if params.batch_norm:
+        if params.dmn_batch_norm:
             memory = batch_norm(memory, is_training=is_training)
-        memory = dropout(memory, params.keep_prob, is_training)
+        memory = dropout(memory, params.dmn_keep_prob, is_training)
 
         with tf.name_scope('Answer'):
             # Answer module : feed-forward version (for it is one word answer)
@@ -105,7 +105,7 @@ class DMN(BaseModel):
             # Cross-Entropy loss
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, answer)
             loss = tf.reduce_mean(cross_entropy)
-            total_loss = loss + params.weight_decay * tf.add_n(tf.get_collection('l2'))
+            total_loss = loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
         with tf.variable_scope('Accuracy'):
             # Accuracy
@@ -158,7 +158,7 @@ class DMN(BaseModel):
             self.opt_op = None
 
     def positional_encoding(self):
-        V, L = self.params.embed_size, self.params.max_sent_size
+        V, L = self.params.dmn_embedding_size, self.params.sentence_size
         encoding = np.zeros([L, V])
         for l in range(L):
             for v in range(V):
@@ -173,8 +173,8 @@ class DMN(BaseModel):
         """
         params = self.params
         input, question, label = batches
-        N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
-        V = params.embed_size
+        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        V = params.dmn_embedding_size
 
         # make input and question fixed size
         new_input = np.zeros([N, F, L])  # zero padding
@@ -186,15 +186,15 @@ class DMN(BaseModel):
         for n in range(N):
             for i, sentence in enumerate(input[n]):
                 sentence_len = len(sentence)
-                new_input[n, i, :sentence_len] = [self.words.word_to_index(w) for w in sentence]
+                new_input[n, i, :sentence_len] = [self.words.word2idx[w] for w in sentence]
                 input_masks[n, i, :sentence_len, :] = 1.  # mask words
 
             fact_counts.append(len(input[n]))
 
             sentence_len = len(question[n])
-            new_question[n, :sentence_len] = [self.words.word_to_index(w) for w in question[n]]
+            new_question[n, :sentence_len] = [self.words.word2idx[w] for w in question[n]]
 
-            new_labels.append(self.words.word_to_index(label[n]))
+            new_labels.append(self.words.word2idx[label[n]])
 
         return new_input, new_question, new_labels, fact_counts, input_masks
 

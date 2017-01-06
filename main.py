@@ -3,91 +3,110 @@ import os
 import sys
 import tensorflow as tf
 import time
+import argparse
 
-from read_data import read_babi, get_max_sizes
-from data_utils import WordTable
+from data_helper.read_data import read_babi, get_max_sizes
+from data_helper.data_utils import WordTable
 
-flags = tf.app.flags
+parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
-# directories
-flags.DEFINE_string('model', 'Q2A', 'Model type [Q2A]')
-flags.DEFINE_string('mode', 'train', 'train or test or custom[train]')
-flags.DEFINE_string('data_dir', 'babi', 'Data directory [babi]')
-flags.DEFINE_string('save_dir', 'save', 'Save path [save]')
-flags.DEFINE_string('load_dir', '', 'Load path [load]')
-flags.DEFINE_string('expert_dir', '', 'Expert path []') ## for loading expert in GQ model
+# Action and target and arch
+parser.add_argument('action', choices=['train', 'test', 'rl'])
+parser.add_argument('target', choices=['expert', 'learner', 'xxx'])
+parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren', 'xxx'])
+
+# directory
+parser.add_argument('--expert_dir', default='')
+parser.add_argument('--learner_dir', default='')
 
 # training options
-flags.DEFINE_bool('gpu', True, 'Use GPU? [True]')
-flags.DEFINE_integer('batch_size', 128, 'Batch size during training and testing [128]')
-flags.DEFINE_integer('num_epochs', 256, 'Number of epochs for training [256]')
-flags.DEFINE_float('learning_rate', 0.002, 'Learning rate [0.002]')
-flags.DEFINE_integer('acc_period', 10, 'Training accuracy display period [10]')
-flags.DEFINE_integer('val_period', 40, 'Validation period (for display purpose) [40]')
-flags.DEFINE_integer('save_period', 80, 'Save period [80]') ## not used, use val_period as save_period instead to perform 
-                                                            ## early stopping
+parser.add_argument('--task', default=1, type=int, choices=range(1, 21))
+parser.add_argument('--batch_size', default=128, type=int)
+parser.add_argument('--num_epochs', default=256, type=int)
+parser.add_argument('--learning_rate', default=0.002, type=float)
+parser.add_argument('--val_ratio', default=0.1, type=float)
+parser.add_argument('--acc_period', default=10, type=int)
+parser.add_argument('--val_period', default=40, type=int)
+parser.add_argument('--save_period', default=80, type=int)
 
-# model params
-flags.DEFINE_integer('memory_step', 3, 'Episodic Memory steps [3]')
-flags.DEFINE_string('memory_update', 'relu', 'Episodic meory update method - relu or gru [relu]')
-flags.DEFINE_integer('embed_size', 80, 'Word embedding size [80]')
-flags.DEFINE_integer('hidden_size', 80, 'Size of hidden units [80]')
+# dmn params
+parser.add_argument('--dmn_memory_step', default=3, type=int)
+parser.add_argument('--dmn_memory_update', default='relu')
+parser.add_argument('--dmn_embedding_size', default=80, type=int)
+parser.add_argument('--dmn_weight_decay', default=0.001, type=float)
+parser.add_argument('--dmn_keep_prob', default=1., type=float)
+parser.add_argument('--dmn_batch_norm', dest='dmn_batch_norm', action='store_true')
+parser.add_argument('--no_dmn_batch_norm', dest='dmn_batch_norm', action='store_false')
+parser.set_defaults(dmn_batch_norm=True)
 
-# train hyperparameters
-flags.DEFINE_float('weight_decay', 0.001, 'Weight decay - 0 to turn off L2 regularization [0.001]')
-flags.DEFINE_float('keep_prob', 1., 'Dropout rate - 1.0 to turn off [1.0]')
-flags.DEFINE_bool('batch_norm', True, 'Use batch normalization? [True]')
+# ren params
+parser.add_argument('--ren_embedding_size', default=80, type=int)
+parser.add_argument('--ren_num_blocks', default=20, type=int)
 
-# bAbi dataset params
-flags.DEFINE_integer('task', 1, 'bAbi Task number [1]')
-flags.DEFINE_float('val_ratio', 0.1, 'Validation data ratio to training data [0.1]')
-
-FLAGS = flags.FLAGS
+args = parser.parse_args()
 
 def main(_):
-    words = WordTable()
-    if not os.path.exists(FLAGS.save_dir):
-        os.makedirs(FLAGS.save_dir, exist_ok=True)
+    load = (args.target == 'xxx' and args.arch == 'xxx')
+    if args.target == 'expert':
+        if load:
+            if args.expert_dir == '':
+                raise Exception('expert_dir not specified')
+            elif not os.path.exist(args.expert_dir):
+                raise Exception('expert_dir not exists')
+            dir = args.expert_dir
+        else:
+            dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
+            if not os.path.exists(dir):
+                os.makedirs(dir, exist_ok=True)
+    elif args.target == 'learner':
+        if load:
+            if args.leaner_dir == '':
+                raise Exception('leaner_dir not specified')
+            elif not os.path.exist(args.leaner_dir):
+                raise Exception('leaner_dir not exists')
+            dir = args.learner_dir
+        else:
+            dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
+            if not os.path.exists(dir):
+                os.makedirs(dir, exist_ok=True)
+    args.load = load;
+    args.dir = dir;
 
-    if FLAGS.model == 'Q2A':
-        from Q2A import DMN as Model
-    elif FLAGS.model == 'A2Q':
-        from A2Q import DMN as Model
-    elif FLAGS.model == 'SEQ2SEQ':
-        from seq2seq import Seq2Seq as Model
+    if args.target == 'expert' and args.arch == 'dmn':
+        from Q2A.dmn import DMN as MainModel
+    elif args.target == 'expert' and args.arch == 'ren':
+        from Q2A.ren import REN as MainModel
+    elif args.target == 'learner' and args.arch == 'dmn':
+        from A2Q.dmn import DMN as MainModel
+    elif args.target == 'learner' and args.arch == 'seq2seq':
+        from A2Q.seq2seq import Seq2Seq as MainModel
     else:
-        raise Exception("Unsupported model!")
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.model+'_task_{}'.format(
-        FLAGS.task))
+        raise Exception('Unsupported model!')
 
-    train = read_babi(os.path.join(FLAGS.data_dir, 'train'), FLAGS.task, 'train', FLAGS.batch_size, words)
-    test = read_babi(os.path.join(FLAGS.data_dir, 'test'), FLAGS.task, 'test', FLAGS.batch_size, words)
-    val = train.split_dataset(FLAGS.val_ratio)
-    FLAGS.max_sent_size, FLAGS.max_ques_size, FLAGS.max_fact_count = get_max_sizes(train, test, val)
-    if FLAGS.mode == 'train':
-        summary_dir = os.path.join(FLAGS.save_dir, "summary")
+    words = WordTable()
+    train = read_babi(os.path.join('babi', 'train'), args.task, 'train', args.batch_size, words)
+    test = read_babi(os.path.join('babi', 'test'), args.task, 'test', args.batch_size, words)
+    val = train.split_dataset(args.val_ratio)
+    args.sentence_size, args.question_size, args.story_size = get_max_sizes(train, test, val)
+
+    if args.action == 'train':
+        summary_dir = os.path.join(args.dir, "summary")
         if tf.gfile.Exists(summary_dir):
             tf.gfile.DeleteRecursively(summary_dir)
-        model = Model(FLAGS, words)
-        if not FLAGS.load_dir == '':
-            model.load()
 
-        model.train(train, val)
-        model.save_flags()
+        main_model = MainModel(args, words)
+        if args.load: main_model.load()
+        main_model.train(train, val)
+        main_model.save_flags()
 
-    elif FLAGS.mode == 'test':
-        model = Model(FLAGS, words)
-        if not FLAGS.load_dir == '':
-            model.load()
-        else:
-            print('Need Loading')
-            return
-
-        model.eval(test, name='Test')
-        model.decode(test, sys.stdout, all=False)
-
-    else:
-        raise Exception("Unsupported executing mode!")
+    elif args.action == 'test':
+        main_model = MainModel(args, words)
+        main_model.load()
+        main_model.eval(test, name='Test')
+        main_model.decode(test, sys.stdout, all=False)
+    
+    elif args.action == 'rl':
+        pass
 
 if __name__ == '__main__':
     tf.app.run()

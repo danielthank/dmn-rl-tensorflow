@@ -3,12 +3,12 @@ from tqdm import tqdm
 import tensorflow as tf
 from tensorflow.python.ops import rnn_cell
 
-from GQ_base_model import GQBaseModel
-from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
+from A2Q.base_model import BaseModel
+from dmn_helper.episode_module import EpisodeModule
+from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
 
 
-class DMN(GQBaseModel):
+class DMN(BaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
     def build(self, forward_only):
