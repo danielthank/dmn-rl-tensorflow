@@ -9,7 +9,7 @@ from ren_helper.dynamic_memory_cell import DynamicMemoryCell
 from ren_helper.model_utils import get_sequence_length
 
 class REN(BaseModel):
-    def build(self, feed_previous, forward_only):
+    def build(self, forward_only):
         params = self.params
         batch_size, sentence_size, question_size, story_size = params.batch_size, params.batch_size, params.question_size, params.story_size
         embedding_size, vocab_size = params.ren_embedding_size, self.words.vocab_size
@@ -37,12 +37,15 @@ class REN(BaseModel):
                 shape=[vocab_size, 1])
             embedding_params_masked = embedding_params * embedding_mask
 
+            print(story)
+
             story_embedding = tf.nn.embedding_lookup(embedding_params_masked, story)
-            q_embedding = tf.nn.embedding_lookup(embedding_params_masked, question)
+            print(story_embedding)
+            question_embedding = tf.nn.embedding_lookup(embedding_params_masked, question)
 
             # Input Module
-            encoded_story = get_input_encoding(story_embedding, ones_initializer, 'StoryEncoding')
-            encoded_query = get_input_encoding(query_embedding, ones_initializer, 'QuestionEncoding')
+            encoded_story = self.get_input_encoding(story_embedding, ones_initializer, 'StoryEncoding')
+            encoded_question = self.get_input_encoding(question_embedding, ones_initializer, 'QuestionEncoding')
 
             # Memory Module
             # We define the keys outside of the cell so they may be used for state initialization.
@@ -95,19 +98,20 @@ class REN(BaseModel):
             if not forward_only:
                 self.opt_op = opt_op
 
-    def get_input_encoding(embedding, initializer=None, scope=None):
+    def get_input_encoding(self, embedding, initializer=None, scope=None):
         """
         Implementation of the learned multiplicative mask from Section 2.1, Equation 1. This module is also described
         in [End-To-End Memory Networks](https://arxiv.org/abs/1502.01852) as Position Encoding (PE). The mask allows
         the ordering of words in a sentence to affect the encoding.
         """
+        print(embedding)
         with tf.variable_scope(scope, 'Encoding', initializer=initializer):
             _, _, max_sentence_length, _ = embedding.get_shape().as_list()
             positional_mask = tf.get_variable('positional_mask', [max_sentence_length, 1])
             encoded_input = tf.reduce_sum(embedding * positional_mask, reduction_indices=[2])
             return encoded_input
 
-    def get_output(last_state, encoded_query, num_blocks, vocab_size,
+    def get_output(self, last_state, encoded_question, num_blocks, vocab_size,
             activation=tf.nn.relu,
             initializer=None,
             scope=None):
@@ -120,7 +124,7 @@ class REN(BaseModel):
             _, _, embedding_size = last_state.get_shape().as_list()
 
             # Use the encoded_query to attend over memories (hidden states of dynamic last_state cell blocks)
-            attention = tf.reduce_sum(last_state * encoded_query, reduction_indices=[2])
+            attention = tf.reduce_sum(last_state * encoded_question, reduction_indices=[2])
 
             # Subtract max for numerical stability (softmax is shift invariant)
             attention_max = tf.reduce_max(attention, reduction_indices=[-1], keep_dims=True)
@@ -134,6 +138,6 @@ class REN(BaseModel):
             R = tf.get_variable('R', [embedding_size, vocab_size])
             H = tf.get_variable('H', [embedding_size, embedding_size])
 
-            q = tf.squeeze(encoded_query, squeeze_dims=[1])
+            q = tf.squeeze(encoded_question, squeeze_dims=[1])
             y = tf.matmul(activation(q + tf.matmul(u, H)), R)
             return y
