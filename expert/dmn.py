@@ -8,6 +8,7 @@ from tensorflow.python.ops import rnn_cell
 from expert.base_model import BaseModel
 from dmn_helper.episode_module import EpisodeModule
 from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary
+from ren_helper.model_utils import get_sequence_length
 
 
 class DMN(BaseModel):
@@ -23,14 +24,19 @@ class DMN(BaseModel):
         input = tf.placeholder('int32', shape=[N, F, L], name='x')  # [num_batch, fact_count, sentence_len]
         question = tf.placeholder('int32', shape=[N, Q], name='q')  # [num_batch, question_len]
         answer = tf.placeholder('int32', shape=[N], name='y')  # [num_batch] - one word answer
-        fact_counts = tf.placeholder('int64', shape=[N], name='fc')
-        input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
+        # fact_counts = tf.placeholder('int64', shape=[N], name='fc')
+        fact_counts = get_sequence_length(input)
+        # input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
         is_training = tf.placeholder(tf.bool)
 
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
         l = self.positional_encoding()
-        embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+        with tf.variable_scope('Embedding'):
+            embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+            embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
+            embedding = embedding * embedding_mask
+            variable_summary([embedding])
 
         with tf.name_scope('SentenceReader'):
             input_list = tf.unpack(tf.transpose(input))  # L x [F, N]
@@ -41,7 +47,8 @@ class DMN(BaseModel):
                 input_embed.append(embed)
             # apply positional encoding
             input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [L, F, N, V] -> [N, F, L, V]
-            encoded = l * input_embed * input_mask
+            # encoded = l * input_embed * input_mask
+            encoded = l * input_embed
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
 
         # dropout time
@@ -143,7 +150,7 @@ class DMN(BaseModel):
 
         # placeholders
         self.x = input
-        self.xm = input_mask
+        # self.xm = input_mask
         self.q = question
         self.y = answer
         self.fc = fact_counts
@@ -173,7 +180,6 @@ class DMN(BaseModel):
             self.x: batches[0],
             self.q: batches[1],
             self.y: batches[2],
-            self.fc: fact_counts,
             self.is_training: is_train
         }
 
