@@ -168,45 +168,11 @@ class DMN(BaseModel):
 
         return encoding
 
-    def preprocess_batch(self, batches):
-        """ Make padding and masks last word of sentence. (EOS token)
-        :param batches: A tuple (input, question, label, mask)
-        :return A tuple (input, question, label, mask)
-        """
-        params = self.params
-        input, question, label = batches
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
-        V = params.dmn_embedding_size
-
-        # make input and question fixed size
-        new_input = np.zeros([N, F, L])  # zero padding
-        input_masks = np.zeros([N, F, L, V])
-        new_question = np.zeros([N, Q])
-        new_labels = []
-        fact_counts = []
-
-        for n in range(N):
-            for i, sentence in enumerate(input[n]):
-                sentence_len = len(sentence)
-                new_input[n, i, :sentence_len] = [self.words.word2idx[w] for w in sentence]
-                input_masks[n, i, :sentence_len, :] = 1.  # mask words
-
-            fact_counts.append(len(input[n]))
-
-            sentence_len = len(question[n])
-            new_question[n, :sentence_len] = [self.words.word2idx[w] for w in question[n]]
-
-            new_labels.append(self.words.word2idx[label[n]])
-
-        return new_input, new_question, new_labels, fact_counts, input_masks
-
     def get_feed_dict(self, batches, is_train):
-        input, question, label, fact_counts, mask = self.preprocess_batch(batches)
         return {
-            self.x: input,
-            self.xm: mask,
-            self.q: question,
-            self.y: label,
+            self.x: batches[0],
+            self.q: batches[1],
+            self.y: batches[2],
             self.fc: fact_counts,
             self.is_training: is_train
         }

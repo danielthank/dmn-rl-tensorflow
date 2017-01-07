@@ -22,7 +22,6 @@ class REN(BaseModel):
         story = tf.placeholder('int32', shape=[None, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
         question = tf.placeholder('int32', shape=[None, question_size], name='q')  # [num_batch, question_len]
         answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
-        fact_counts = tf.placeholder('int64', shape=[None], name='fc')
         is_training = tf.placeholder(tf.bool)
         # batch_size = tf.shape(input)[0]
 
@@ -148,38 +147,11 @@ class REN(BaseModel):
             y = tf.matmul(activation(q + tf.matmul(u, H)), R)
             return y
 
-    def preprocess_batch(self, batches):
-        """ Make padding and masks last word of sentence. (EOS token)
-        :param batches: A tuple (input, question, label, mask)
-        :return A tuple (input, question, label, mask)
-        """
-        params = self.params
-        input, question, label = batches
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
-        V = params.dmn_embedding_size
-
-        # make input and question fixed size
-        new_input = np.zeros([N, F, L])  # zero padding
-        new_question = np.zeros([N, Q])
-        new_labels = []
-
-        for n in range(N):
-            for i, sentence in enumerate(input[n]):
-                sentence_len = len(sentence)
-                new_input[n, i, :sentence_len] = [self.words.word2idx[w] for w in sentence]
-
-            sentence_len = len(question[n])
-            new_question[n, :sentence_len] = [self.words.word2idx[w] for w in question[n]]
-            new_labels.append(self.words.word2idx[label[n]])
-
-        return new_input, new_question, new_labels
-
     def get_feed_dict(self, batches, is_train):
-        input, question, label = self.preprocess_batch(batches)
         return {
-            self.x: input,
-            self.q: question,
-            self.y: label,
+            self.x: batches[0],
+            self.q: batches[1],
+            self.y: batches[2],
             self.is_training: is_train
         }
     
