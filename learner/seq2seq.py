@@ -199,15 +199,15 @@ class Seq2Seq(BaseModel):
         for n in range(N):
             for i, sentence in enumerate(input[n]):
                 sentence_len = len(sentence)
-                new_input[n, i, :sentence_len] = [self.words.word_to_index(w) for w in sentence]
+                new_input[n, i, :sentence_len] = [self.words.word2idx[w] for w in sentence]
                 input_masks[n, i, :sentence_len, :] = 1.  # mask words
 
             fact_counts.append(len(input[n]))
 
             sentence_len = len(question[n])
-            new_question[n, :sentence_len] = [self.words.word_to_index(w) for w in question[n]]
+            new_question[n, :sentence_len] = [self.words.word2idx[w] for w in question[n]]
 
-            new_labels.append(self.words.word_to_index(label[n]))
+            new_labels.append(self.words.word2idx[label[n]])
 
         return new_input, new_question, new_labels, fact_counts, input_masks
 
