@@ -8,7 +8,7 @@ import argparse
 from collections import namedtuple
 from copy import deepcopy
 
-from data_helper.read_data import read_babi, get_max_sizes
+from data_helper.read_data import read_babi
 from data_helper.data_utils import WordTable
 
 from expert.dmn import DMN as EXPERT_DMN
@@ -63,7 +63,7 @@ parser.add_argument('--no_dmn_batch_norm', dest='dmn_batch_norm', action='store_
 parser.set_defaults(dmn_batch_norm=True)
 
 # ren params
-parser.add_argument('--ren_embedding_size', default=80, type=int)
+parser.add_argument('--ren_embedding_size', default=100, type=int)
 parser.add_argument('--ren_num_blocks', default=20, type=int)
 
 args = parser.parse_args()
@@ -85,11 +85,8 @@ def main(_):
     args.save_dir = save_dir
 
     ## data set ##
-    words = WordTable()
-    train = read_babi(os.path.join('babi', 'train'), args.task, 'train', args.batch_size, words)
-    test = read_babi(os.path.join('babi', 'test'), args.task, 'test', args.batch_size, words)
+    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size)
     val = train.split_dataset(args.val_ratio)
-    args.sentence_size, args.question_size, args.story_size = get_max_sizes(train, test, val)
 
     ## create params ##
     params_dict = vars(args)
