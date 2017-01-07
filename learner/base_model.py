@@ -189,18 +189,20 @@ class BaseModel(object):
             outputs = self.get_question(feed_dict)
             expert_entropys, expert_anses = self.ask_expert(batch, outputs)
             for idx, output in enumerate(outputs):
+                """
                 pred_q = []
                 for time in output:
                     pred_q.append(self.words.idx2word[time])
-                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(token+' ' for token in batch[1][idx])
+                """
+                content = "".join(self.words.idx2word[token]+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(self.words.idx2word[token]+' ' for token in batch[1][idx])
                 ans = batch[2][idx]
-                pred_q = "".join(token+' ' for token in pred_q)
+                pred_q = "".join(self.words.idx2word[token]+' ' for token in output)
                 expert_entropy = expert_entropys[idx]
                 expert_ans = self.words.idx2word[expert_anses[idx]]
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
-                outputfile.write("Ans: "+ans+'\n')
+                outputfile.write("Ans: "+self.words.idx2word[ans]+'\n')
                 outputfile.write("Predict_Q: "+pred_q.strip()+"\n")
                 outputfile.write("Expert Result: "+str(expert_entropy)+"\t"+expert_ans+"\n\n")
             if not all:
