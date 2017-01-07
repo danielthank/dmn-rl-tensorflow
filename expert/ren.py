@@ -13,16 +13,16 @@ from ren_helper.model_utils import get_sequence_length
 class REN(BaseModel):
     def build(self, forward_only):
         params = self.params
-        batch_size, sentence_size, question_size, story_size = params.batch_size, params.batch_size, params.question_size, params.story_size
+        batch_size, sentence_size, question_size, story_size = params.batch_size, params.sentence_size, params.question_size, params.story_size
         embedding_size, vocab_size = params.ren_embedding_size, self.words.vocab_size
         num_blocks = params.ren_num_blocks
 
         # initialize self
         # placeholders
-        story = tf.placeholder('int32', shape=[batch_size, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
-        question = tf.placeholder('int32', shape=[batch_size, question_size], name='q')  # [num_batch, question_len]
-        answer = tf.placeholder('int32', shape=[batch_size], name='y')  # [num_batch] - one word answer
-        fact_counts = tf.placeholder('int64', shape=[batch_size], name='fc')
+        story = tf.placeholder('int32', shape=[None, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
+        question = tf.placeholder('int32', shape=[None, question_size], name='q')  # [num_batch, question_len]
+        answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
+        fact_counts = tf.placeholder('int64', shape=[None], name='fc')
         is_training = tf.placeholder(tf.bool)
         # batch_size = tf.shape(input)[0]
 
@@ -39,11 +39,9 @@ class REN(BaseModel):
                 shape=[vocab_size, 1])
             embedding_params_masked = embedding_params * embedding_mask
 
-            print(story)
 
             story_embedding = tf.nn.embedding_lookup(embedding_params_masked, story)
-            print(story_embedding)
-            question_embedding = tf.nn.embedding_lookup(embedding_params_masked, question)
+            question_embedding = tf.nn.embedding_lookup(embedding_params_masked, tf.expand_dims(question, 1))
 
             # Input Module
             encoded_story = self.get_input_encoding(story_embedding, ones_initializer, 'StoryEncoding')
@@ -64,6 +62,17 @@ class REN(BaseModel):
                 sequence_length=sequence_length,
                 initial_state=initial_state)
 
+            logits = self.get_output(last_state, encoded_question,
+                num_blocks=num_blocks,
+                vocab_size=vocab_size,
+                initializer=normal_initializer,
+                activation=activation)
+
+            self.output = tf.nn.softmax(logits)
+            predicts = tf.argmax(self.output, 1)
+            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, answer)
+            self.total_loss = tf.reduce_mean(cross_entropy)
+
             if not forward_only:
                 def learning_rate_decay_fn(lr, global_step):
                     return tf.train.exponential_decay(lr,
@@ -75,7 +84,7 @@ class REN(BaseModel):
                                        "loss",
                                        "gradients",
                                        "gradient_norm"]
-                opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                opt_op = tf.contrib.layers.optimize_loss(self.total_loss,
                                                          self.global_step,
                                                          learning_rate=params.learning_rate,
                                                          optimizer=tf.train.AdamOptimizer,
@@ -86,19 +95,15 @@ class REN(BaseModel):
             self.q = question
             self.y = answer
             self.is_training = is_training
+            corrects = tf.cast(tf.equal(tf.cast(predicts, 'int32'), answer), 'int32')
+            self.num_corrects = tf.reduce_sum(corrects)
+            self.accuracy = tf.reduce_mean(corrects)
 
             # Output Module
-            self.output = self.get_output(last_state, encoded_question,
-                num_blocks=num_blocks,
-                vocab_size=vocab_size,
-                initializer=normal_initializer,
-                activation=activation)
-            self.prediction = tf.argmax(output, 1)
-
-            # Training
-            self.total_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(output, answer)
             if not forward_only:
                 self.opt_op = opt_op
+            else:
+                self.opt_op = None
 
     def get_input_encoding(self, embedding, initializer=None, scope=None):
         """
@@ -106,7 +111,6 @@ class REN(BaseModel):
         in [End-To-End Memory Networks](https://arxiv.org/abs/1502.01852) as Position Encoding (PE). The mask allows
         the ordering of words in a sentence to affect the encoding.
         """
-        print(embedding)
         with tf.variable_scope(scope, 'Encoding', initializer=initializer):
             _, _, max_sentence_length, _ = embedding.get_shape().as_list()
             positional_mask = tf.get_variable('positional_mask', [max_sentence_length, 1])
@@ -143,3 +147,50 @@ class REN(BaseModel):
             q = tf.squeeze(encoded_question, squeeze_dims=[1])
             y = tf.matmul(activation(q + tf.matmul(u, H)), R)
             return y
+
+    def preprocess_batch(self, batches):
+        """ Make padding and masks last word of sentence. (EOS token)
+        :param batches: A tuple (input, question, label, mask)
+        :return A tuple (input, question, label, mask)
+        """
+        params = self.params
+        input, question, label = batches
+        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        V = params.dmn_embedding_size
+
+        # make input and question fixed size
+        new_input = np.zeros([N, F, L])  # zero padding
+        new_question = np.zeros([N, Q])
+        new_labels = []
+
+        for n in range(N):
+            for i, sentence in enumerate(input[n]):
+                sentence_len = len(sentence)
+                new_input[n, i, :sentence_len] = [self.words.word2idx[w] for w in sentence]
+
+            sentence_len = len(question[n])
+            new_question[n, :sentence_len] = [self.words.word2idx[w] for w in question[n]]
+            new_labels.append(self.words.word2idx[label[n]])
+
+        return new_input, new_question, new_labels
+
+    def get_feed_dict(self, batches, is_train):
+        input, question, label = self.preprocess_batch(batches)
+        return {
+            self.x: input,
+            self.q: question,
+            self.y: label,
+            self.is_training: is_train
+        }
+    
+    def save_params(self):
+        assert self.action == 'train'
+        params = self.params
+        filename = os.path.join(self.save_dir, "params.json")
+        save_params_dict = {'ren_num_blocks': params.ren_num_blocks,
+                            'ren_embedding_size': params.ren_embedding_size,
+                            'target': params.target,
+                            'arch': params.arch,
+                            'task': params.task}
+        with open(filename, 'w') as file:
+            json.dump(save_params_dict, file, indent=4)
