@@ -1,23 +1,47 @@
 #!/usr/bin/env python3
 import os
 import sys
+import json
 import tensorflow as tf
 import time
 import argparse
+from collections import namedtuple
+from copy import deepcopy
 
 from data_helper.read_data import read_babi, get_max_sizes
 from data_helper.data_utils import WordTable
 
+from expert.dmn import DMN as EXPERT_DMN
+from expert.ren import REN as EXPERT_REN
+
+from learner.dmn import DMN as LEARNER_DMN
+from learner.seq2seq import Seq2Seq as LEARNER_Seq2Seq
+
+
+## accessible model ##
+MODEL = {'expert_dmn':      EXPERT_DMN,
+         'expert_ren':      EXPERT_REN,
+         'learner_dmn':     LEARNER_DMN,
+         'learner_seq2seq': LEARNER_Seq2Seq}
+
+
+def load_params_dict(filename):
+    with open(filename, 'r') as file:
+        params_dict = json.load(file)
+    return params_dict
+
+
+## arguments parser ##
 parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
 # Action and target and arch
 parser.add_argument('action', choices=['train', 'test', 'rl'])
-parser.add_argument('target', choices=['expert', 'learner', 'xxx'])
-parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren', 'xxx'])
+parser.add_argument('target', choices=['expert', 'learner'])
+parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren'])
 
 # directory
 parser.add_argument('--expert_dir', default='')
-parser.add_argument('--learner_dir', default='')
+parser.add_argument('--load_dir', default='')
 
 # training options
 parser.add_argument('--task', default=1, type=int, choices=range(1, 21))
@@ -27,7 +51,6 @@ parser.add_argument('--learning_rate', default=0.002, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
 parser.add_argument('--acc_period', default=10, type=int)
 parser.add_argument('--val_period', default=40, type=int)
-parser.add_argument('--save_period', default=80, type=int)
 
 # dmn params
 parser.add_argument('--dmn_memory_step', default=3, type=int)
@@ -45,68 +68,71 @@ parser.add_argument('--ren_num_blocks', default=20, type=int)
 
 args = parser.parse_args()
 
+
+## main function ##
 def main(_):
-    load = (args.target == 'xxx' and args.arch == 'xxx')
-    if args.target == 'expert':
-        if load:
-            if args.expert_dir == '':
-                raise Exception('expert_dir not specified')
-            elif not os.path.exist(args.expert_dir):
-                raise Exception('expert_dir not exists')
-            dir = args.expert_dir
-        else:
-            dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
-            if not os.path.exists(dir):
-                os.makedirs(dir, exist_ok=True)
-    elif args.target == 'learner':
-        if load:
-            if args.leaner_dir == '':
-                raise Exception('leaner_dir not specified')
-            elif not os.path.exist(args.leaner_dir):
-                raise Exception('leaner_dir not exists')
-            dir = args.learner_dir
-        else:
-            dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
-            if not os.path.exists(dir):
-                os.makedirs(dir, exist_ok=True)
-    args.load = load;
-    args.dir = dir;
-
-    if args.target == 'expert' and args.arch == 'dmn':
-        from Q2A.dmn import DMN as MainModel
-    elif args.target == 'expert' and args.arch == 'ren':
-        from Q2A.ren import REN as MainModel
-    elif args.target == 'learner' and args.arch == 'dmn':
-        from A2Q.dmn import DMN as MainModel
-    elif args.target == 'learner' and args.arch == 'seq2seq':
-        from A2Q.seq2seq import Seq2Seq as MainModel
+    ## import main model ##
+    main_model_name = '{}_{}'.format(args.target, args.arch)
+    if main_model_name in MODEL:
+        MainModel = MODEL[main_model_name]
     else:
-        raise Exception('Unsupported model!')
+        raise Exception("Unsupported target-arch pair!")
 
+    ## create save dir ##
+    save_dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+    args.save_dir = save_dir
+
+    ## data set ##
     words = WordTable()
     train = read_babi(os.path.join('babi', 'train'), args.task, 'train', args.batch_size, words)
     test = read_babi(os.path.join('babi', 'test'), args.task, 'test', args.batch_size, words)
     val = train.split_dataset(args.val_ratio)
     args.sentence_size, args.question_size, args.story_size = get_max_sizes(train, test, val)
 
-    if args.action == 'train':
-        summary_dir = os.path.join(args.dir, "summary")
-        if tf.gfile.Exists(summary_dir):
-            tf.gfile.DeleteRecursively(summary_dir)
+    ## create params ##
+    params_dict = vars(args)
+    params_class = namedtuple('params_class', params_dict.keys())
+    params = params_class(**params_dict)
+    if not params.load_dir == '':
+        params_filename = os.path.join(params.load_dir, 'params.json')
+        load_params = load_params_dict(params_filename)
+        if not load_params['task'] == params.task:
+            raise Exception("incompatible task with load model!")
+        if not load_params['target'] == params.target and load_params['arch'] == params.arch:
+            raise Exception("incompatible main model with load model!")
+        params = params._replace(**load_params)
+    if not params.expert_dir == '':
+        params_filename = os.path.join(params.expert_dir, 'params.json')
+        load_params = load_params_dict(params_filename)
+        if not load_params['task'] == params.task:
+            raise Exception("incompatible task with expert model!")
+        if not load_params['target'] == 'expert':
+            raise Exception("dir contains no expert model!")
+        expert_params = params._replace(action='test', load_dir=params.expert_dir, **load_params)
+    else:
+        expert_params = None
 
-        main_model = MainModel(args, words)
-        if args.load: main_model.load()
+    
+    ## run action ##
+    if args.action == 'train':
+        main_model = MainModel(words, params, expert_params)
         main_model.train(train, val)
-        main_model.save_flags()
+        main_model.save_params()
 
     elif args.action == 'test':
-        main_model = MainModel(args, words)
-        main_model.load()
+        if args.load_dir == '':
+            raise Exception("Need a trained model to test!")
+        main_model = MainModel(words, params, expert_params)
         main_model.eval(test, name='Test')
         main_model.decode(test, sys.stdout, all=False)
     
     elif args.action == 'rl':
+        if not args.target == 'learner':
+            raise Exception("Only learner can run rl action!")
         pass
+
 
 if __name__ == '__main__':
     tf.app.run()

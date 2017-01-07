@@ -1,9 +1,11 @@
+import os
+import json
 import numpy as np
 import tensorflow as tf
 
 from functools import partial
 
-from Q2A.base_model import BaseModel
+from expert.base_model import BaseModel
 from ren_helper.activations import prelu
 from ren_helper.dynamic_memory_cell import DynamicMemoryCell
 from ren_helper.model_utils import get_sequence_length
