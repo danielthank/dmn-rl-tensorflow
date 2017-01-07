@@ -9,82 +9,72 @@ import tensorflow as tf
 from tensorflow.contrib.layers import xavier_initializer
 from tqdm import tqdm
 
-from Q2A.dmn import DMN as ExpertModel
+from expert.dmn import DMN as EXPERT_DMN
+from expert.ren import REN as EXPERT_REN
 
 
-def isnamedtupleinstance(x):
-    t = type(x)
-    b = t.__bases__
-    if len(b) != 1 or b[0] != tuple: return False
-    f = getattr(t, '_fields', None)
-    if not isinstance(f, tuple): return False
-    return all(type(n)==str for n in f)
-
-
-def load_flags(filename):
-    with open(filename, 'r') as file:
-        params = json.load(file)
-    return params
-
-
-def flags2params(flags):
-    if isnamedtupleinstance(flags):
-        return deepcopy(flags)
-    elif isinstance(flags, type(tf.app.flags.FLAGS)):
-        flags_dict = deepcopy(flags.__dict__['__flags'])
-        subclass = namedtuple('subclass', flags_dict.keys())
-        params = subclass(**flags_dict)
-        return params
-    else:
-        raise Exception("Unsupported type of flags!")
+## accessible expert model ##
+EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
+                'expert_ren': EXPERT_REN}
 
 
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
-    def __init__(self, flags, words):
+    def __init__(self, words, params, expert_params, *args):
         ## words ##
         self.words = words
 
-        ## set params ##
-        # self.params = flags2params(flags)
-        self.params = flags
-        self.mode = self.params.action
-        if self.mode == 'test':
-            params_filename = os.path.join(self.params.save_dir, 'params.json')
-            load_params = load_flags(params_filename)
-            if not load_params['task'] == self.params.task:
-                raise Exception("incompatible task!")
-            self.params = self.params._replace(**load_params)
+        ## dirs ##
+        self.save_dir = params.save_dir
+        self.load_dir = params.load_dir
 
-        ## load expert ##
-        print("Loading Expert...")
-        self.expert = self.load_expert()
-        self.expert.load()
+        ## set params ##
+        self.action = params.action
+        self.params = params
 
         ## build model graph ##
-        self.sess = tf.Session()
-        default_init = xavier_initializer()
-        with tf.variable_scope('GQ', initializer=default_init):
-            print("Building GQ model...")
-            self.global_step = tf.Variable(0, name='global_step', trainable=False)
-            if self.mode == 'train':
-                self.build(forward_only=False)
-            elif self.mode == 'test':
-                self.build(forward_only=True)
-            self.merged = tf.summary.merge_all()
+        self.graph = tf.Graph()
+        self.sess = tf.Session(graph=self.graph)
+        with self.graph.as_default():
+            with tf.variable_scope('Learner', initializer=xavier_initializer()):
+                print("Building Learner model...")
+                self.global_step = tf.Variable(0, name='global_step', trainable=False)
+                if self.action == 'train':
+                    self.build(forward_only=False)
+                elif self.action == 'test':
+                    self.build(forward_only=True)
+                self.merged = tf.summary.merge_all()
+                self.init_op = tf.global_variables_initializer()
+
+        ## init saver ##
+        with self.graph.as_default():
+            self.saver = tf.train.Saver()
+
+        ## init variables ##
+        if not self.load_dir == '':
+            self.load()
+        else:
+            summary_dir = os.path.join(self.save_dir, "summary")
+            if tf.gfile.Exists(summary_dir):
+                tf.gfile.DeleteRecursively(summary_dir)
+            self.sess.run(self.init_op)
+
+        ## summary writer##
+        if self.action == 'train':
+            summary_dir = os.path.join(self.save_dir, "summary")
+            self.summary_writer = tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph)
 
         ## train & eval run output ##
         self.train_list = [self.merged, self.opt_op, self.global_step] 
         self.eval_list = [self.total_loss, self.global_step]
+        
+        ## load expert ##
+        if expert_params == None:
+            raise Exception("Need expert params to load an expert!")
+        else:
+            print("Loading Expert...")
+            self.expert = self.load_expert(expert_params)
 
-        ## init saver, summary writer, and model variables ##
-        self.saver = tf.train.Saver()
-        self.sess.run(tf.global_variables_initializer())
-        self.load_dir = self.params.load_dir
-        if self.mode == 'train':
-            self.save_dir = self.params.save_dir
-            summary_dir = os.path.join(self.save_dir, "summary")
-            self.summary_writer = tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph)
     
     def __del__(self):
         if hasattr(self, "sess"):
@@ -94,6 +84,9 @@ class BaseModel(object):
         raise NotImplementedError()
 
     def get_feed_dict(self, batch, is_train):
+        raise NotImplementedError()
+
+    def save_params(self):
         raise NotImplementedError()
 
     def get_question(self, feed_dict):
@@ -109,7 +102,7 @@ class BaseModel(object):
 
     def train(self, train_data, val_data):
         params = self.params
-        assert params.mode == 'train'
+        assert self.action == 'train'
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
@@ -163,6 +156,7 @@ class BaseModel(object):
         return loss
 
     def save(self):
+        assert self.action == 'train'
         print("Saving model to dir %s" % self.save_dir)
         import os
         self.saver.save(self.sess, os.path.join(self.save_dir, 'run'), self.global_step)
@@ -175,30 +169,10 @@ class BaseModel(object):
             sys.exit(0)
         self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
 
-    def load_expert(self):
-        params = self.params
-        expert_params = deepcopy(params)
-        replace_params = {'model': 'EXPERT',
-                          'mode': 'test',
-                          'save_dir': params.expert_dir,
-                          'load_dir': params.expert_dir}
-        expert_params = params._replace(**replace_params)
-        return ExpertModel(expert_params, self.words)
-
-    def save_flags(self):
-        params = self.params
-        assert params.mode == 'train'
-        filename = os.path.join(params.save_dir, "params.json")
-        save_params = {'memory_step': params.memory_step,
-                       'memory_update': params.memory_update,
-                       'embed_size': params.embed_size,
-                       'hidden_size': params.hidden_size,
-                       'weight_decay': params.weight_decay,
-                       'keep_prob': params.keep_prob,
-                       'batch_norm': params.batch_norm,
-                       'task': params.task}
-        with open(filename, 'w') as file:
-            json.dump(save_params, file, indent=4)
+    def load_expert(self, expert_params):
+        expert_model_name = '{}_{}'.format(expert_params.target, expert_params.arch)
+        ExpertModel = EXPERT_MODEL[expert_model_name]
+        return ExpertModel(self.words, expert_params, None)
 
     def ask_expert(self, batch, pred_qs):
         output_probs = self.expert.output_by_question(batch, pred_qs)

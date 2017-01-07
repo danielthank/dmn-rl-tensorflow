@@ -1,3 +1,5 @@
+import os
+import json
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -5,16 +7,15 @@ from tensorflow.python.ops import rnn_cell
 #from tensorflow.contrib.rnn import static_bidirectional_rnn
 from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
-from GQ_base_model import GQBaseModel
-from episode_module import EpisodeModule
-from nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
+from learner.base_model import BaseModel
+from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
 
 
-class Seq2Seq(GQBaseModel):
+class Seq2Seq(BaseModel):
     def build(self, forward_only):
         params = self.params
-        N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
-        V, d, A = params.embed_size, params.hidden_size, self.words.vocab_size
+        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
 
         # initialize self
         # placeholders
@@ -40,7 +41,7 @@ class Seq2Seq(GQBaseModel):
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
             # dropout
             """
-            facts = dropout(facts, params.keep_prob, is_training)
+            facts = dropout(facts, params.dmn_keep_prob, is_training)
             """
 
         with tf.name_scope('InputFusion') as scope:
@@ -73,43 +74,6 @@ class Seq2Seq(GQBaseModel):
             #f_outputs = forward_states + backward_states  # [N, F, d]
             f_outputs = forward_state
             """
-
-        """
-        with tf.name_scope('Answer'):
-            answer_vec = tf.nn.embedding_lookup(embedding, answer)
-
-        # Episodic Memory
-        with tf.variable_scope('Episodic') as scope:
-            episode = EpisodeModule(d, answer_vec, facts, is_training, params.batch_norm)
-            memory = tf.identity(answer_vec) # [N, d]
-
-            for t in range(params.memory_step):
-                with tf.variable_scope('Layer%d' % t):
-                    if params.memory_update == 'gru':
-                        memory = gru(episode.new(memory), memory)[0]
-                    else:
-                        # ReLU update
-                        c = episode.new(memory)
-                        concated = tf.concat(1, [memory, c, answer_vec])
-
-                        w_t = weight('w_t', [3 * d, d])
-                        z = tf.matmul(concated, w_t)
-                        if params.batch_norm:
-                            z = batch_norm(z, is_training)
-                        else:
-                            b_t = bias('b_t', d)
-                            z = z + b_t
-                        memory = tf.nn.relu(z)  # [N, d]
-                #scope.reuse_variables()
-
-            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-            variable_summary(variables)
-
-            # variable_summary([episode.w1, episode.b1, episode.w2, episode.b2])
-            if params.batch_norm:
-                memory = batch_norm(memory, is_training=is_training)
-            memory = dropout(memory, params.keep_prob, is_training)
-        """
 
         with tf.variable_scope('Question') as scope:
             ## output projection weight ##
@@ -163,7 +127,7 @@ class Seq2Seq(GQBaseModel):
             # Cross-Entropy loss
             loss = tf.nn.seq2seq.sequence_loss(q_outputs, target_list,
                                                [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )
-            total_loss = loss + params.weight_decay * tf.add_n(tf.get_collection('l2'))
+            total_loss = loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Training
         if not forward_only:
@@ -207,7 +171,7 @@ class Seq2Seq(GQBaseModel):
             self.opt_op = None
 
     def positional_encoding(self):
-        V, L = self.params.embed_size, self.params.max_sent_size
+        V, L = self.params.dmn_embedding_size, self.params.sentence_size
         encoding = np.zeros([L, V])
         for l in range(L):
             for v in range(V):
@@ -222,8 +186,8 @@ class Seq2Seq(GQBaseModel):
         """
         params = self.params
         input, question, label = batches
-        N, L, Q, F = params.batch_size, params.max_sent_size, params.max_ques_size, params.max_fact_count
-        V = params.embed_size
+        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        V = params.dmn_embedding_size
 
         # make input and question fixed size
         new_input = np.zeros([N, F, L])  # zero padding
@@ -258,3 +222,19 @@ class Seq2Seq(GQBaseModel):
             self.is_training: is_train,
             self.feed_previous: feed_previous
         }
+
+    def save_params(self):
+        assert self.action == 'train'
+        params = self.params
+        filename = os.path.join(self.save_dir, "params.json")
+        save_params_dict = {'dmn_memory_step': params.dmn_memory_step,
+                            'dmn_memory_update': params.dmn_memory_update,
+                            'dmn_embedding_size': params.dmn_embedding_size,
+                            'dmn_weight_decay': params.dmn_weight_decay,
+                            'dmn_keep_prob': params.dmn_keep_prob,
+                            'dmn_batch_norm': params.dmn_batch_norm,
+                            'target': params.target,
+                            'arch': params.arch,
+                            'task': params.task}
+        with open(filename, 'w') as file:
+            json.dump(save_params_dict, file, indent=4)
