@@ -11,18 +11,17 @@ from ren_helper.dynamic_memory_cell import DynamicMemoryCell
 from ren_helper.model_utils import get_sequence_length
 
 class REN(BaseModel):
-    def build(self, feed_previous, forward_only):
+    def build(self, forward_only):
         params = self.params
-        batch_size, sentence_size, question_size, story_size = params.batch_size, params.batch_size, params.question_size, params.story_size
+        batch_size, sentence_size, question_size, story_size = params.batch_size, params.sentence_size, params.question_size, params.story_size
         embedding_size, vocab_size = params.ren_embedding_size, self.words.vocab_size
         num_blocks = params.ren_num_blocks
 
         # initialize self
         # placeholders
-        story = tf.placeholder('int32', shape=[batch_size, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
-        question = tf.placeholder('int32', shape=[batch_size, question_size], name='q')  # [num_batch, question_len]
-        answer = tf.placeholder('int32', shape=[batch_size], name='y')  # [num_batch] - one word answer
-        fact_counts = tf.placeholder('int64', shape=[batch_size], name='fc')
+        story = tf.placeholder('int32', shape=[None, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
+        question = tf.placeholder('int32', shape=[None, question_size], name='q')  # [num_batch, question_len]
+        answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
         is_training = tf.placeholder(tf.bool)
         # batch_size = tf.shape(input)[0]
 
@@ -39,12 +38,13 @@ class REN(BaseModel):
                 shape=[vocab_size, 1])
             embedding_params_masked = embedding_params * embedding_mask
 
+
             story_embedding = tf.nn.embedding_lookup(embedding_params_masked, story)
-            q_embedding = tf.nn.embedding_lookup(embedding_params_masked, question)
+            question_embedding = tf.nn.embedding_lookup(embedding_params_masked, tf.expand_dims(question, 1))
 
             # Input Module
-            encoded_story = get_input_encoding(story_embedding, ones_initializer, 'StoryEncoding')
-            encoded_query = get_input_encoding(query_embedding, ones_initializer, 'QuestionEncoding')
+            encoded_story = self.get_input_encoding(story_embedding, ones_initializer, 'StoryEncoding')
+            encoded_question = self.get_input_encoding(question_embedding, ones_initializer, 'QuestionEncoding')
 
             # Memory Module
             # We define the keys outside of the cell so they may be used for state initialization.
@@ -61,6 +61,17 @@ class REN(BaseModel):
                 sequence_length=sequence_length,
                 initial_state=initial_state)
 
+            logits = self.get_output(last_state, encoded_question,
+                num_blocks=num_blocks,
+                vocab_size=vocab_size,
+                initializer=normal_initializer,
+                activation=activation)
+
+            self.output = tf.nn.softmax(logits)
+            predicts = tf.argmax(self.output, 1)
+            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, answer)
+            self.total_loss = tf.reduce_mean(cross_entropy)
+
             if not forward_only:
                 def learning_rate_decay_fn(lr, global_step):
                     return tf.train.exponential_decay(lr,
@@ -72,7 +83,7 @@ class REN(BaseModel):
                                        "loss",
                                        "gradients",
                                        "gradient_norm"]
-                opt_op = tf.contrib.layers.optimize_loss(total_loss,
+                opt_op = tf.contrib.layers.optimize_loss(self.total_loss,
                                                          self.global_step,
                                                          learning_rate=params.learning_rate,
                                                          optimizer=tf.train.AdamOptimizer,
@@ -83,21 +94,17 @@ class REN(BaseModel):
             self.q = question
             self.y = answer
             self.is_training = is_training
+            corrects = tf.cast(tf.equal(tf.cast(predicts, 'int32'), answer), 'int32')
+            self.num_corrects = tf.reduce_sum(corrects)
+            self.accuracy = tf.reduce_mean(corrects)
 
             # Output Module
-            self.output = self.get_output(last_state, encoded_question,
-                num_blocks=num_blocks,
-                vocab_size=vocab_size,
-                initializer=normal_initializer,
-                activation=activation)
-            self.prediction = tf.argmax(output, 1)
-
-            # Training
-            self.total_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(output, answer)
             if not forward_only:
                 self.opt_op = opt_op
+            else:
+                self.opt_op = None
 
-    def get_input_encoding(embedding, initializer=None, scope=None):
+    def get_input_encoding(self, embedding, initializer=None, scope=None):
         """
         Implementation of the learned multiplicative mask from Section 2.1, Equation 1. This module is also described
         in [End-To-End Memory Networks](https://arxiv.org/abs/1502.01852) as Position Encoding (PE). The mask allows
@@ -109,7 +116,7 @@ class REN(BaseModel):
             encoded_input = tf.reduce_sum(embedding * positional_mask, reduction_indices=[2])
             return encoded_input
 
-    def get_output(last_state, encoded_query, num_blocks, vocab_size,
+    def get_output(self, last_state, encoded_question, num_blocks, vocab_size,
             activation=tf.nn.relu,
             initializer=None,
             scope=None):
@@ -122,7 +129,7 @@ class REN(BaseModel):
             _, _, embedding_size = last_state.get_shape().as_list()
 
             # Use the encoded_query to attend over memories (hidden states of dynamic last_state cell blocks)
-            attention = tf.reduce_sum(last_state * encoded_query, reduction_indices=[2])
+            attention = tf.reduce_sum(last_state * encoded_question, reduction_indices=[2])
 
             # Subtract max for numerical stability (softmax is shift invariant)
             attention_max = tf.reduce_max(attention, reduction_indices=[-1], keep_dims=True)
@@ -136,6 +143,26 @@ class REN(BaseModel):
             R = tf.get_variable('R', [embedding_size, vocab_size])
             H = tf.get_variable('H', [embedding_size, embedding_size])
 
-            q = tf.squeeze(encoded_query, squeeze_dims=[1])
+            q = tf.squeeze(encoded_question, squeeze_dims=[1])
             y = tf.matmul(activation(q + tf.matmul(u, H)), R)
             return y
+
+    def get_feed_dict(self, batches, is_train):
+        return {
+            self.x: batches[0],
+            self.q: batches[1],
+            self.y: batches[2],
+            self.is_training: is_train
+        }
+    
+    def save_params(self):
+        assert self.action == 'train'
+        params = self.params
+        filename = os.path.join(self.save_dir, "params.json")
+        save_params_dict = {'ren_num_blocks': params.ren_num_blocks,
+                            'ren_embedding_size': params.ren_embedding_size,
+                            'target': params.target,
+                            'arch': params.arch,
+                            'task': params.task}
+        with open(filename, 'w') as file:
+            json.dump(save_params_dict, file, indent=4)

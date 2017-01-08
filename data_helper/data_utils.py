@@ -5,13 +5,12 @@ import os
 import numpy as np
 
 class DataSet:
-    def __init__(self, batch_size, xs, qs, ys, fact_counts, shuffle=True, name="dataset"):
+    def __init__(self, batch_size, xs, qs, ys, shuffle=True, name="dataset"):
         assert batch_size <= len(xs), "batch size cannot be greater than data size."
         self.name = name
         self.xs = xs
         self.qs = qs
         self.ys = ys
-        self.fact_counts = fact_counts
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.count = len(self.xs)

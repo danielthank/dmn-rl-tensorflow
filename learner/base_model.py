@@ -71,7 +71,10 @@ class BaseModel(object):
             self.summary_writer = tf.summary.FileWriter(logdir=self.summary_dir, graph=self.sess.graph)
 
         ## train & eval run output ##
-        self.train_list = [self.merged, self.opt_op, self.global_step]
+        if self.action == 'train':
+            self.train_list = [self.merged, self.Pre_opt_op, self.global_step]
+        elif self.action == 'rl':
+            self.train_list = [self.merged, self.RL_opt_op, self.global_step]
         if not self.action == 'rl':
             self.eval_list = [self.total_loss, self.global_step]
             self.test_batch = self.pre_test_batch
@@ -208,14 +211,18 @@ class BaseModel(object):
         return inverse_entropy, max_index
 
     def CQ_similarity(self, content, keyterm):
+        sent_cnt = 0.
         content_merge = []
         for sent in content:
+            if sent[0] == 0:
+                break
             content_merge += sent
+            sent_cnt += 1.
         cnt = content_merge.count(keyterm)
         if cnt == 0.:
             return -1.
         else:
-            return content_merge.count(keyterm) / float(len(content))
+            return content_merge.count(keyterm) / sent_cnt
 
     def CQ_reward(self, batch_x, qs_idxs):
         rewards = []
@@ -237,14 +244,13 @@ class BaseModel(object):
             outputs = self.get_question(feed_dict)
             expert_entropys, expert_anses = self.ask_expert(batch, outputs)
             for idx, output in enumerate(outputs):
-                pred_q = []
-                for time in output:
-                    pred_q.append(self.words.idx2word[time])
+                pred_q = [self.words.idx2word[token] for token in output]
                 keyterm = self.words.find_keyterm(*pred_q)
-                CQ_sim = self.CQ_similarity(batch[0][idx], keyterm)
-                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(token+' ' for token in batch[1][idx])
-                ans = batch[2][idx]
+                CQ_sim = self.CQ_similarity(batch[0][idx], self.words.word2idx[keyterm])
+
+                content = "".join(self.words.idx2word[token]+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(self.words.idx2word[token]+' ' for token in batch[1][idx])
+                ans = self.words.idx2word[batch[2][idx]]
                 pred_q = "".join(token+' ' for token in pred_q)
                 expert_entropy = expert_entropys[idx]
                 expert_ans = self.words.idx2word[expert_anses[idx]]

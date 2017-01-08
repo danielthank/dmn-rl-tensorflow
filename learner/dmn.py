@@ -8,6 +8,7 @@ from tensorflow.python.ops import rnn_cell
 from learner.base_model import BaseModel
 from dmn_helper.episode_module import EpisodeModule
 from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
+from ren_helper.model_utils import get_sequence_length
 
 
 EPS = 1e-20
@@ -26,8 +27,8 @@ class DMN(BaseModel):
         input = tf.placeholder('int32', shape=[N, F, L], name='x')  # [num_batch, fact_count, sentence_len]
         question = tf.placeholder('int32', shape=[N, Q], name='q')  # [num_batch, question_len]
         answer = tf.placeholder('int32', shape=[N], name='y')  # [num_batch] - one word answer
-        fact_counts = tf.placeholder('int64', shape=[N], name='fc')
-        input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
+        fact_counts = get_sequence_length(input)
+        # input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
         is_training = tf.placeholder(tf.bool)
         feed_previous = tf.placeholder(tf.bool)
 
@@ -36,6 +37,8 @@ class DMN(BaseModel):
         l = self.positional_encoding()
         with tf.variable_scope('Embedding'):
             embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+            embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
+            embedding = embedding * embedding_mask
             variable_summary([embedding])
 
         with tf.name_scope('SentenceReader'):
@@ -160,7 +163,6 @@ class DMN(BaseModel):
 
         # placeholders
         self.x = input
-        self.xm = input_mask
         self.q = question
         self.y = answer
         self.fc = fact_counts
@@ -177,10 +179,9 @@ class DMN(BaseModel):
         self.output = q_probs
         if forward_only:
             self.opt_op = None
-        elif self.action == 'rl':
-            self.opt_op = self.RLOpt()
         else:
-            self.opt_op = self.PreTrainOpt()
+            self.RL_opt_op = self.RLOpt()
+            self.Pre_opt_op = self.PreTrainOpt()
 
     def PreTrainOpt(self):
         with tf.name_scope("PreTrainOpt"):
@@ -190,12 +191,17 @@ class DMN(BaseModel):
                                                   decay_steps=5000,
                                                   decay_rate=0.95,
                                                   staircase=True)
+            OPTIMIZER_SUMMARIES = ["learning_rate",
+                                   "loss",
+                                   "gradients",
+                                   "gradient_norm"] if self.action == 'train' else []
             opt_op = tf.contrib.layers.optimize_loss(self.total_loss,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,
                                                      clip_gradients=5.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn)
+                                                     learning_rate_decay_fn=learning_rate_decay_fn,
+                                                     summaries=OPTIMIZER_SUMMARIES)
             """
             optimizer = tf.train.AdamOptimizer(self.params.learning_rate)
             opt_op = optimizer.minimize(self.total_loss, global_step=self.global_step)
@@ -211,12 +217,17 @@ class DMN(BaseModel):
                                                   decay_steps=5000,
                                                   decay_rate=0.95,
                                                   staircase=True)
+            OPTIMIZER_SUMMARIES = ["learning_rate",
+                                   "loss",
+                                   "gradients",
+                                   "gradient_norm"] if self.action == 'rl' else []
             opt_op = tf.contrib.layers.optimize_loss(self.J,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,
                                                      clip_gradients=5.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn)
+                                                     learning_rate_decay_fn=learning_rate_decay_fn,
+                                                     summaries=OPTIMIZER_SUMMARIES)
             """
             optimizer = tf.train.AdamOptimizer(self.params.learning_rate)
             opt_op = optimizer.minimize(self.J, global_step=self.global_step)
@@ -233,46 +244,11 @@ class DMN(BaseModel):
 
         return encoding
 
-    def preprocess_batch(self, batches):
-        """ Make padding and masks last word of sentence. (EOS token)
-        :param batches: A tuple (input, question, label, mask)
-        :return A tuple (input, question, label, mask)
-        """
-        params = self.params
-        input, question, label = batches
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
-        V = params.dmn_embedding_size
-
-        # make input and question fixed size
-        new_input = np.zeros([N, F, L])  # zero padding
-        input_masks = np.zeros([N, F, L, V])
-        new_question = np.zeros([N, Q])
-        new_labels = []
-        fact_counts = []
-
-        for n in range(N):
-            for i, sentence in enumerate(input[n]):
-                sentence_len = len(sentence)
-                new_input[n, i, :sentence_len] = [self.words.word2idx[w] for w in sentence]
-                input_masks[n, i, :sentence_len, :] = 1.  # mask words
-
-            fact_counts.append(len(input[n]))
-
-            sentence_len = len(question[n])
-            new_question[n, :sentence_len] = [self.words.word2idx[w] for w in question[n]]
-
-            new_labels.append(self.words.word2idx[label[n]])
-
-        return new_input, new_question, new_labels, fact_counts, input_masks
-
     def get_feed_dict(self, batches, feed_previous, is_train):
-        input, question, label, fact_counts, mask = self.preprocess_batch(batches)
         return {
-            self.x: input,
-            self.xm: mask,
-            self.q: question,
-            self.y: label,
-            self.fc: fact_counts,
+            self.x: batches[0],
+            self.q: batches[1],
+            self.y: batches[2],
             self.is_training: is_train,
             self.feed_previous: feed_previous
         }

@@ -1,108 +1,155 @@
-""" a neat code from https://github.com/YerevaNN/Dynamic-memory-networks-in-Theano/ """
 import os
+import re
 
-from data_helper.data_utils import DataSet
-from copy import deepcopy
+from data_helper.data_utils import DataSet, WordTable
 
-
-def load_babi(data_dir, task_id, type='train'):
-    """ Load bAbi Dataset.
-    :param data_dir
-    :param task_id: bAbI Task ID
-    :param type: "train" or "test"
-    :return: dict
+SPLIT_RE = re.compile('(\W+)?')
+def tokenize(sentence):
     """
-    files = os.listdir(data_dir)
-    files = [os.path.join(data_dir, f) for f in files]
-    s = 'task_{}.txt'.format(task_id)
-    file_name = [f for f in files if s in f][0]
+    Tokenize a string by splitting on non-word characters and stripping whitespace.
+    """
+    ret = []
+    for token in re.split(SPLIT_RE, sentence):
+        token = token.strip()
+        if token:
+            ret.append(token.lower())
+    return ret
 
-    # Parsing
-    tasks = []
-    skip = False
-    curr_task = None
-    for i, line in enumerate(open(file_name)):
-        id = int(line[0:line.find(' ')])
-        if id == 1:
-            skip = False
-            curr_task = {"C": [], "Q": "", "A": ""}
-
-        # Filter tasks that are too large
-        if skip: continue
-        if task_id == 3 and id > 130:
-            skip = True
-            continue
-
-        elif task_id != 3 and id > 70:
-            skip = True
-            continue
-
+def parse_task(lines, only_supporting=False):
+    """
+    Parse the bAbI task format described here: https://research.facebook.com/research/babi/
+    If only_supporting is True, only the sentences that support the answer are kept.
+    """
+    stories = []
+    story = []
+    for line in lines:
+        # line = line.decode('utf-8').strip()
         line = line.strip()
-        line = line.replace('.', ' . ')
-        line = line[line.find(' ') + 1:]
-        if line.find('?') == -1:
-            curr_task["C"].append(line)
+        nid, line = line.split(' ', 1)
+        nid = int(nid)
+        if nid == 1:
+            story = []
+        if '\t' in line:
+            query, answer, supporting = line.split('\t')
+            query = tokenize(query)
+            substory = None
+            if only_supporting:
+                # Only select the related substory
+                supporting = map(int, supporting.split())
+                substory = [story[i - 1] for i in supporting]
+            else:
+                # Provide all the substories
+                substory = [x for x in story if x]
+            stories.append((substory, query, answer))
+            story.append('')
         else:
-            idx = line.find('?')
-            tmp = line[idx + 1:].split('\t')
-            curr_task["Q"] = line[:idx]
-            curr_task["A"] = tmp[1].strip()
-            tasks.append(deepcopy(curr_task))
+            sentence = tokenize(line)
+            story.append(sentence)
+    return stories
 
-    print("Loaded {} data from bAbI {} task {}".format(len(tasks), type, task_id))
-    return tasks
-
-
-def process_babi(raw, word_table):
-    """ Tokenizes sentences.
-    :param raw: dict returned from load_babi
-    :param word_table: WordTable
-    :return:
+def get_tokenizer(stories, word_table):
     """
+    Recover unique tokens as a vocab and map the tokens to ids.
+    """
+    tokens_all = []
+    for story, query, answer in stories:
+        for sentence in story:
+            word_table.count_doc(*sentence)
+            tokens_all.extend(sentence)
+        tokens_all.extend(query + [answer])
+    word_table.add_vocab(*tokens_all)
+
+def pad_task(task, max_story_length, max_sentence_length, max_query_length):
+    """
+    Pad sentences, stories, and queries to a consistence length.
+    """
+    stories = []
     questions = []
-    inputs = []
     answers = []
-    fact_counts = []
+    for story, query, answer in task:
+        for sentence in story:
+            for _ in range(max_sentence_length - len(sentence)):
+                sentence.append(0)
+            assert len(sentence) == max_sentence_length
 
-    for x in raw:
-        inp = []
-        for fact in x["C"]:
-            sent = [w for w in fact.lower().split(' ') if len(w) > 0]
-            inp.append(sent)
-            word_table.add_vocab(*sent)
-            word_table.count_doc(*sent)
+        for _ in range(max_story_length - len(story)):
+            story.append([0 for _ in range(max_sentence_length)])
 
-        q = [w for w in x["Q"].lower().split(' ') if len(w) > 0]
+        for _ in range(max_query_length - len(query)):
+            query.append(0)
 
-        word_table.add_vocab(*q, x["A"])
-        inputs.append(inp)
-        questions.append(q)
-        answers.append(x["A"])  # NOTE: here we assume the answer is one word!
-        fact_counts.append(len(inp))
+        stories.append(story)
+        questions.append(query)
+        answers.append(answer)
 
-    return inputs, questions, answers, fact_counts
+        assert len(story) == max_story_length
+        assert len(query) == max_query_length
 
+    return stories, questions, answers
 
-def read_babi(data_dir, task_id, type, batch_size, word_table):
-    """ Reads bAbi data set.
-    :param data_dir: bAbi data directory
-    :param task_id: task no. (int)
-    :param type: 'train' or 'test'
-    :param batch_size: how many examples in a minibatch?
-    :param word_table: WordTable
-    :return: DataSet
+def truncate_task(stories, max_length):
+    stories_truncated = []
+    for story, query, answer in stories:
+        story_truncated = story[-max_length:]
+        stories_truncated.append((story_truncated, query, answer))
+    return stories_truncated
+
+def tokenize_task(stories, word_table):
     """
-    data = load_babi(data_dir, task_id, type)
-    x, q, y, fc = process_babi(data, word_table)
-    return DataSet(batch_size, x, q, y, fc, name=type)
+    Convert all tokens into their unique ids.
+    """
+    story_ids = []
+    for story, query, answer in stories:
+        story = [[word_table.word2idx[token] for token in sentence] for sentence in story]
+        query = [word_table.word2idx[token] for token in query]
+        answer = word_table.word2idx[answer]
+        story_ids.append((story, query, answer))
+    return story_ids
 
+def read_babi(task_ids, batch_size):
+    """ Reads bAbi data set.
+    :param task_id: task no. (int)
+    :param batch_size: how many examples in a minibatch?
+    """
+    word_table = WordTable()
 
-def get_max_sizes(*data_sets):
-    max_sent_size = max_ques_size = max_fact_count = 0
-    for data in data_sets:
-        for x, q, fc in zip(data.xs, data.qs, data.fact_counts):
-            for fact in x: max_sent_size = max(max_sent_size, len(fact))
-            max_ques_size = max(max_ques_size, len(q))
-            max_fact_count = max(max_fact_count, fc)
+    all_train = []
+    all_test = []
 
-    return max_sent_size, max_ques_size, max_fact_count
+    for task_id in task_ids:
+        if task_id == 3:
+            truncate_length = 130
+        else:
+            truncate_length = 70
+
+        f_train = open(os.path.join('babi', 'train', 'task_{}.txt'.format(task_id)))
+        train = parse_task(f_train.readlines())
+        train = truncate_task(train, truncate_length)
+        get_tokenizer(train, word_table)
+        train = tokenize_task(train, word_table)
+
+        f_test = open(os.path.join('babi', 'test', 'task_{}.txt'.format(task_id)))
+        test = parse_task(f_test.readlines())
+        test = truncate_task(test, truncate_length)
+        get_tokenizer(test, word_table)
+        test = tokenize_task(test, word_table)
+
+        all_train.extend(train)
+        all_test.extend(test)
+
+    a = max([len(story) for story, _, _ in train])
+    b = max([len(story) for story, _, _ in test])
+    max_story_length = max(a, b)
+
+    a = max([len(sentence) for story, _, _ in train for sentence in story])
+    b = max([len(sentence) for story, _, _ in test for sentence in story])
+    max_sentence_length = max(a, b)
+
+    a = max([len(question) for _, question, _ in train])
+    b = max([len(question) for _, question, _ in test])
+    max_question_length = max(a, b)
+
+    train_stories, train_questions, train_answers = pad_task(train, max_story_length, max_sentence_length, max_question_length)
+    test_stories, test_questions, test_answers = pad_task(test, max_story_length, max_sentence_length, max_question_length)
+
+    return DataSet(batch_size, train_stories, train_questions, train_answers, name='train'), DataSet(batch_size, test_stories, test_questions, test_answers, name='test'), word_table, max_story_length, max_sentence_length, max_question_length
