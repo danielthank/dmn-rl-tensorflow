@@ -95,6 +95,7 @@ def main(_):
     params_dict = vars(args)
     params_class = namedtuple('params_class', params_dict.keys())
     params = params_class(**params_dict)
+
     if not params.load_dir == '':
         params_filename = os.path.join(params.load_dir, 'params.json')
         load_params = load_params_dict(params_filename)
@@ -103,6 +104,7 @@ def main(_):
         if not load_params['target'] == params.target and load_params['arch'] == params.arch:
             raise Exception("incompatible main model with load model!")
         params = params._replace(**load_params)
+
     if not params.expert_dir == '':
         params_filename = os.path.join(params.expert_dir, 'params.json')
         load_params = load_params_dict(params_filename)
@@ -112,6 +114,8 @@ def main(_):
             raise Exception("dir contains no expert model!")
         expert_params = params._replace(action='test', load_dir=params.expert_dir, **load_params)
     else:
+        if params.target == 'learner':
+            raise Exception("Need to load an expert from expert_dir to run a learner!")
         expert_params = None
 
     
@@ -131,7 +135,9 @@ def main(_):
     elif args.action == 'rl':
         if not args.target == 'learner':
             raise Exception("Only learner can run rl action!")
-        pass
+        main_model = MainModel(words, params, expert_params)
+        main_model.train(train, val)
+        main_model.save_params()
 
 
 if __name__ == '__main__':

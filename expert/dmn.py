@@ -30,22 +30,18 @@ class DMN(BaseModel):
         # Prepare parameters
         gru = rnn_cell.GRUCell(d)
         l = self.positional_encoding()
-        embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+        with tf.variable_scope('Embedding'):
+            embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
+            variable_summary([embedding])
 
         with tf.name_scope('SentenceReader'):
-            input_list = tf.unpack(tf.transpose(input))  # L x [F, N]
-            input_embed = []
-            for facts in input_list:
-                facts = tf.unpack(facts)
-                embed = tf.pack([tf.nn.embedding_lookup(embedding, w) for w in facts])  # [F, N, V]
-                input_embed.append(embed)
+            input_embed = tf.nn.embedding_lookup(embedding, input) # [N, F, L] -> [N, F, L, V]
             # apply positional encoding
-            input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [L, F, N, V] -> [N, F, L, V]
-            encoded = l * input_embed * input_mask
+            #encoded = l * input_embed * input_mask
+            encoded = l * input_embed
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
-
-        # dropout time
-        facts = dropout(facts, params.dmn_keep_prob, is_training)
+            # dropout time
+            facts = dropout(facts, params.dmn_keep_prob, is_training)
 
         with tf.name_scope('InputFusion'):
             # Bidirectional RNN

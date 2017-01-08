@@ -119,6 +119,7 @@ class Seq2Seq(BaseModel):
                                 lambda: decoder(True),
                                 lambda: decoder(False))
             q_outputs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
+            q_outputs = [tf.nn.softmax(out) for out in q_outputs]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
 

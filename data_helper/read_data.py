@@ -70,6 +70,7 @@ def process_babi(raw, word_table):
             sent = [w for w in fact.lower().split(' ') if len(w) > 0]
             inp.append(sent)
             word_table.add_vocab(*sent)
+            word_table.count_doc(*sent)
 
         q = [w for w in x["Q"].lower().split(' ') if len(w) > 0]
 

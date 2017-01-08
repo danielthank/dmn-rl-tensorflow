@@ -10,6 +10,9 @@ from dmn_helper.episode_module import EpisodeModule
 from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
 
 
+EPS = 1e-20
+
+
 class DMN(BaseModel):
     """ Dynamic Memory Networks (March 2016 Version - https://arxiv.org/abs/1603.01417)
         Improved End-To-End version."""
@@ -36,17 +39,12 @@ class DMN(BaseModel):
             variable_summary([embedding])
 
         with tf.name_scope('SentenceReader'):
-            input_list = tf.unpack(tf.transpose(input))  # L x [F, N]
-            input_embed = []
-            for facts in input_list:
-                facts = tf.unpack(facts)
-                embed = tf.pack([tf.nn.embedding_lookup(embedding, w) for w in facts])  # [F, N, V]
-                input_embed.append(embed)
+            input_embed = tf.nn.embedding_lookup(embedding, input) # [N, F, L] -> [N, F, L, V]
             # apply positional encoding
-            input_embed = tf.transpose(tf.pack(input_embed), [2, 1, 0, 3])  # [L, F, N, V] -> [N, F, L, V]
-            encoded = l * input_embed * input_mask
+            #encoded = l * input_embed * input_mask
+            encoded = l * input_embed
             facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
-            # dropout
+            # dropout time
             facts = dropout(facts, params.dmn_keep_prob, is_training)
 
         with tf.name_scope('InputFusion'):
@@ -136,36 +134,29 @@ class DMN(BaseModel):
             q_outputs = tf.cond(feed_previous,
                                 lambda: decoder(True),
                                 lambda: decoder(False))
-            q_outputs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
+            q_logprobs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
+            q_probs = [tf.nn.softmax(out) for out in q_logprobs]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
 
         with tf.name_scope('Loss'):
             target_list = tf.unpack(tf.transpose(question)) # Q * [N]
             # Cross-Entropy loss
-            loss = tf.nn.seq2seq.sequence_loss(q_outputs, target_list,
+            loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
                                                [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )
             total_loss = loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
-        # Training
-        if not forward_only:
-            def learning_rate_decay_fn(lr, global_step):
-                return tf.train.exponential_decay(lr,
-                                                  global_step,
-                                                  decay_steps=5000,
-                                                  decay_rate=0.95,
-                                                  staircase=True)
-            opt_op = tf.contrib.layers.optimize_loss(total_loss,
-                                                     self.global_step,
-                                                     learning_rate=params.learning_rate,
-                                                     optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn)
-            """
-            optimizer = tf.train.AdamOptimizer(params.learning_rate)
-            opt_op = optimizer.minimize(total_loss, global_step=self.global_step)
-            variable_summary([lr])
-            """
+        # Policy Gradient
+        chosen_one_hot = tf.placeholder(tf.float32, shape=[N, Q, A], name='act')
+        rewards = tf.placeholder(tf.float32, shape=[N], name='rewards')
+
+        with tf.name_scope("PolicyGradient"):
+            stack_q_probs = tf.stack(q_probs, axis=1) # Q * [N, A] -> [N, Q, A]
+            act_probs = stack_q_probs * chosen_one_hot # [N, Q, A]
+            act_probs = tf.reduce_prod(tf.reduce_sum(act_probs, axis=2), axis=1) # [N, Q, A] -> [N, Q] -> [N]
+
+            J = -1.*tf.reduce_sum(tf.log(act_probs+EPS)*rewards) + params.dmn_weight_decay*tf.add_n(tf.get_collection('l2'))
+
 
         # placeholders
         self.x = input
@@ -176,13 +167,62 @@ class DMN(BaseModel):
         self.is_training = is_training
         self.feed_previous = feed_previous
 
+        self.chosen_one_hot = chosen_one_hot
+        self.rewards = rewards
+
+
         # tensors
         self.total_loss = total_loss
-        self.output = q_outputs
-        if not forward_only:
-            self.opt_op = opt_op
-        else:
+        self.J = J
+        self.output = q_probs
+        if forward_only:
             self.opt_op = None
+        elif self.action == 'rl':
+            self.opt_op = self.RLOpt()
+        else:
+            self.opt_op = self.PreTrainOpt()
+
+    def PreTrainOpt(self):
+        with tf.name_scope("PreTrainOpt"):
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=5000,
+                                                  decay_rate=0.95,
+                                                  staircase=True)
+            opt_op = tf.contrib.layers.optimize_loss(self.total_loss,
+                                                     self.global_step,
+                                                     learning_rate=self.params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=5.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn)
+            """
+            optimizer = tf.train.AdamOptimizer(self.params.learning_rate)
+            opt_op = optimizer.minimize(self.total_loss, global_step=self.global_step)
+            variable_summary([lr])
+            """
+        return opt_op
+
+    def RLOpt(self):
+        with tf.name_scope("RLOpt"):
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=5000,
+                                                  decay_rate=0.95,
+                                                  staircase=True)
+            opt_op = tf.contrib.layers.optimize_loss(self.J,
+                                                     self.global_step,
+                                                     learning_rate=self.params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=5.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn)
+            """
+            optimizer = tf.train.AdamOptimizer(self.params.learning_rate)
+            opt_op = optimizer.minimize(self.J, global_step=self.global_step)
+            variable_summary([lr])
+            """
+        return opt_op
 
     def positional_encoding(self):
         V, L = self.params.dmn_embedding_size, self.params.sentence_size
@@ -238,7 +278,7 @@ class DMN(BaseModel):
         }
 
     def save_params(self):
-        assert self.action == 'train'
+        assert not self.action == 'test'
         params = self.params
         filename = os.path.join(self.save_dir, "params.json")
         save_params_dict = {'dmn_memory_step': params.dmn_memory_step,

@@ -27,6 +27,12 @@ class BaseModel(object):
         ## dirs ##
         self.save_dir = params.save_dir
         self.load_dir = params.load_dir
+        if params.action == 'train':
+            self.summary_dir = os.path.join(self.save_dir, 'pretrain_summary')
+            self.train_batch = self.pre_train_batch
+        elif params.action == 'rl':
+            self.summary_dir = os.path.join(self.save_dir, 'RL_summary')
+            self.train_batch = self.rl_train_batch
 
         ## set params ##
         self.action = params.action
@@ -39,9 +45,9 @@ class BaseModel(object):
             with tf.variable_scope('Learner', initializer=xavier_initializer()):
                 print("Building Learner model...")
                 self.global_step = tf.Variable(0, name='global_step', trainable=False)
-                if self.action == 'train':
+                if not self.action == 'test':
                     self.build(forward_only=False)
-                elif self.action == 'test':
+                else:
                     self.build(forward_only=True)
                 self.merged = tf.summary.merge_all()
                 self.init_op = tf.global_variables_initializer()
@@ -52,28 +58,31 @@ class BaseModel(object):
 
         ## init variables ##
         if not self.load_dir == '':
+            print("Loading model ...")
             self.load()
         else:
-            summary_dir = os.path.join(self.save_dir, "summary")
-            if tf.gfile.Exists(summary_dir):
-                tf.gfile.DeleteRecursively(summary_dir)
+            if tf.gfile.Exists(self.summary_dir):
+                tf.gfile.DeleteRecursively(self.summary_dir)
+            print("Init model ...")
             self.sess.run(self.init_op)
 
         ## summary writer##
-        if self.action == 'train':
-            summary_dir = os.path.join(self.save_dir, "summary")
-            self.summary_writer = tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph)
+        if not self.action == 'test':
+            self.summary_writer = tf.summary.FileWriter(logdir=self.summary_dir, graph=self.sess.graph)
 
         ## train & eval run output ##
-        self.train_list = [self.merged, self.opt_op, self.global_step] 
-        self.eval_list = [self.total_loss, self.global_step]
+        self.train_list = [self.merged, self.opt_op, self.global_step]
+        if not self.action == 'rl':
+            self.eval_list = [self.total_loss, self.global_step]
+            self.test_batch = self.pre_test_batch
+        else:
+            self.eval_list = [self.J, self.global_step]
+            self.test_batch = self.rl_test_batch
         
         ## load expert ##
-        if expert_params == None:
-            raise Exception("Need expert params to load an expert!")
-        else:
-            print("Loading Expert...")
-            self.expert = self.load_expert(expert_params)
+        assert not expert_params == None
+        print("Loading Expert...")
+        self.expert = self.load_expert(expert_params)
 
     
     def __del__(self):
@@ -92,17 +101,38 @@ class BaseModel(object):
     def get_question(self, feed_dict):
         outputs = self.sess.run(self.output, feed_dict=feed_dict)
         outputs = np.argmax(np.stack(outputs, axis=1), axis=2)
+        assert outputs.shape == (self.params.batch_size, self.params.question_size)
         return outputs
 
-    def train_batch(self, feed_dict):
+    def pre_train_batch(self, batch):
+        feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=True)
         return self.sess.run(self.train_list, feed_dict=feed_dict)
 
-    def test_batch(self, feed_dict):
+    def rl_train_batch(self, batch):
+        A = self.words.vocab_size
+        feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True)
+        q_outputs = self.get_question(feed_dict)
+        rewards = self.CQ_reward(batch[0], q_outputs)
+        chosen_one_hot = (np.arange(A) == q_outputs[:, :, None]).astype('float32')
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards})
+        return self.sess.run(self.train_list, feed_dict=feed_dict)
+
+    def pre_test_batch(self, batch):
+        feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
+        return self.sess.run(self.eval_list, feed_dict=feed_dict)
+
+    def rl_test_batch(self, batch):
+        A = self.words.vocab_size
+        feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
+        q_outputs = self.get_question(feed_dict)
+        rewards = self.CQ_reward(batch[0], q_outputs)
+        chosen_one_hot = (np.arange(A) == q_outputs[:, :, None]).astype('float32')
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards})
         return self.sess.run(self.eval_list, feed_dict=feed_dict)
 
     def train(self, train_data, val_data):
         params = self.params
-        assert self.action == 'train'
+        assert not self.action == 'test'
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
@@ -112,8 +142,7 @@ class BaseModel(object):
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch = train_data.next_batch()
-                    feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=True)
-                    summary, _, global_step = self.train_batch(feed_dict)
+                    summary, _, global_step = self.train_batch(batch)
 
                 self.summary_writer.add_summary(summary, global_step)
                 train_data.reset()
@@ -146,8 +175,7 @@ class BaseModel(object):
         losses = []
         for _ in range(num_batches):
             batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
-            batch_loss, global_step = self.test_batch(feed_dict)
+            batch_loss, global_step = self.test_batch(batch)
             losses.append(batch_loss)
         data.reset()
         loss = np.mean(losses)
@@ -156,13 +184,12 @@ class BaseModel(object):
         return loss
 
     def save(self):
-        assert self.action == 'train'
+        assert not self.action == 'test'
         print("Saving model to dir %s" % self.save_dir)
         import os
         self.saver.save(self.sess, os.path.join(self.save_dir, 'run'), self.global_step)
 
     def load(self):
-        print("Loading model ...")
         checkpoint = tf.train.get_checkpoint_state(self.load_dir)
         if checkpoint is None:
             print("Error: No saved model found. Please train first.")
@@ -180,6 +207,27 @@ class BaseModel(object):
         inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
         return inverse_entropy, max_index
 
+    def CQ_similarity(self, content, keyterm):
+        content_merge = []
+        for sent in content:
+            content_merge += sent
+        cnt = content_merge.count(keyterm)
+        if cnt == 0.:
+            return -1.
+        else:
+            return content_merge.count(keyterm) / float(len(content))
+
+    def CQ_reward(self, batch_x, qs_idxs):
+        rewards = []
+        for q_idxs in qs_idxs:
+            pred_q = []
+            for idx in q_idxs:
+                pred_q.append(self.words.idx2word[idx])
+            keyterm = self.words.find_keyterm(*pred_q)
+            CQ_sim = self.CQ_similarity(batch_x, keyterm)
+            rewards.append(CQ_sim)
+        return np.array(rewards).astype('float32')
+
     def decode(self, data, outputfile, all=True):
         tqdm.write("Write decoded output...")
         num_batches = data.num_batches
@@ -192,6 +240,8 @@ class BaseModel(object):
                 pred_q = []
                 for time in output:
                     pred_q.append(self.words.idx2word[time])
+                keyterm = self.words.find_keyterm(*pred_q)
+                CQ_sim = self.CQ_similarity(batch[0][idx], keyterm)
                 content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
                 question = "".join(token+' ' for token in batch[1][idx])
                 ans = batch[2][idx]
@@ -201,8 +251,8 @@ class BaseModel(object):
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
                 outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_Q: "+pred_q.strip()+"\n")
-                outputfile.write("Expert Result: "+str(expert_entropy)+"\t"+expert_ans+"\n\n")
+                outputfile.write("Predict_Q: "+pred_q.strip()+"\tKeyTerm: "+keyterm+"\tCount: "+str(CQ_sim)+'\n')
+                outputfile.write("Expert Entropy: "+str(expert_entropy)+'\t'+expert_ans+"\n\n")
             if not all:
                 break
         data.reset()

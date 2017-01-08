@@ -67,7 +67,6 @@ class WordTable:
 
     def add_vocab(self, *words):
         """ Add vocabularies to dictionary. """
-        seen_words = []
         for word in words:
             if self.word2vec and word not in self.word2vec:
                 self._create_vector(word)
@@ -75,11 +74,22 @@ class WordTable:
             if word not in self.word2idx:
                 index = len(self.idx2word)
                 self.word2idx[word] = index
-                self.word2dc[word] = 1.
                 self.idx2word.append(word)
-            elif not word in seen_words:
+
+    def count_doc(self, *words):
+        seen_words = []
+        for word in words:
+            if word not in self.word2dc:
+                self.word2dc[word] = 1.
+            elif word not in seen_words:
                 self.word2dc[word] += 1.
+                seen_words.append(word)
         self.all_doc_count += 1.
+
+    def find_keyterm(self, *words):
+        doc_counts = np.array([self.word2dc.get(word, np.inf) for word in words])
+        keyterm = words[np.argmin(doc_counts)]
+        return keyterm
 
     def vectorize(self, word):
         """ Converts word to vector.
