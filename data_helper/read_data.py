@@ -137,6 +137,9 @@ def read_babi(task_ids, batch_size):
         all_train.extend(train)
         all_test.extend(test)
 
+    train = all_train
+    test = all_test
+
     a = max([len(story) for story, _, _ in train])
     b = max([len(story) for story, _, _ in test])
     max_story_length = max(a, b)

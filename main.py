@@ -93,6 +93,9 @@ def main(_):
     val = train.split_dataset(args.val_ratio)
     print("training count: {}".format(train.count))
     print("testing count: {}".format(test.count))
+    print("story size: {}".format(args.story_size))
+    print("sentence size: {}".format(args.sentence_size))
+    print("question size: {}".format(args.question_size))
 
     ## create params ##
     params_dict = vars(args)
