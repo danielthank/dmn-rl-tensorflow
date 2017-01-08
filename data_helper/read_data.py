@@ -103,29 +103,36 @@ def tokenize_task(stories, word_table):
         story_ids.append((story, query, answer))
     return story_ids
 
-def read_babi(task_id, batch_size):
+def read_babi(task_ids, batch_size):
     """ Reads bAbi data set.
     :param task_id: task no. (int)
     :param batch_size: how many examples in a minibatch?
     """
-    if task_id == 3:
-        truncate_length = 130
-    else:
-        truncate_length = 70
-
     word_table = WordTable()
 
-    f_train = open(os.path.join('babi', 'train', 'task_{}.txt'.format(task_id)))
-    train = parse_task(f_train.readlines())
-    train = truncate_task(train, truncate_length)
-    get_tokenizer(train, word_table)
-    train = tokenize_task(train, word_table)
+    all_train = []
+    all_test = []
 
-    f_test = open(os.path.join('babi', 'test', 'task_{}.txt'.format(task_id)))
-    test = parse_task(f_test.readlines())
-    test = truncate_task(test, truncate_length)
-    get_tokenizer(test, word_table)
-    test = tokenize_task(test, word_table)
+    for task_id in task_ids:
+        if task_id == 3:
+            truncate_length = 130
+        else:
+            truncate_length = 70
+
+        f_train = open(os.path.join('babi', 'train', 'task_{}.txt'.format(task_id)))
+        train = parse_task(f_train.readlines())
+        train = truncate_task(train, truncate_length)
+        get_tokenizer(train, word_table)
+        train = tokenize_task(train, word_table)
+
+        f_test = open(os.path.join('babi', 'test', 'task_{}.txt'.format(task_id)))
+        test = parse_task(f_test.readlines())
+        test = truncate_task(test, truncate_length)
+        get_tokenizer(test, word_table)
+        test = tokenize_task(test, word_table)
+
+        all_train.extend(train)
+        all_test.extend(test)
 
     a = max([len(story) for story, _, _ in train])
     b = max([len(story) for story, _, _ in test])

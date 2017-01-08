@@ -44,7 +44,7 @@ parser.add_argument('--expert_dir', default='')
 parser.add_argument('--load_dir', default='')
 
 # training options
-parser.add_argument('--task', default=1, type=int, choices=range(1, 21))
+parser.add_argument('--task', default='1', type=str, choices=[str(i) for i in range(1, 21)].append('all'))
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--num_epochs', default=256, type=int)
 parser.add_argument('--learning_rate', default=0.002, type=float)
@@ -85,8 +85,13 @@ def main(_):
     args.save_dir = save_dir
 
     ## data set ##
+    if args.task == 'all':
+        args.task = range(1, 21)
+    else:
+        args.task = [int(args.task)]
     train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size)
     val = train.split_dataset(args.val_ratio)
+    print(train.count)
 
     ## create params ##
     params_dict = vars(args)
