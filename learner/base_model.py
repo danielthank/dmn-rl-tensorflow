@@ -45,6 +45,9 @@ class BaseModel(object):
             with tf.variable_scope('Learner', initializer=xavier_initializer()):
                 print("Building Learner model...")
                 self.global_step = tf.Variable(0, name='global_step', trainable=False)
+                self.min_validation_loss = tf.Variable(np.inf, name='validation_loss', trainable=False)
+                self.new_validation_loss = tf.placeholder('float32', name='new_validation_loss');
+                self.assign_min_validation_loss = self.min_validation_loss.assign(self.new_validation_loss).op
                 if not self.action == 'test':
                     self.build(forward_only=False)
                 else:
@@ -139,7 +142,7 @@ class BaseModel(object):
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
-        min_loss = np.inf
+        min_loss = self.sess.run(self.min_validation_loss)
         print("Training %d epochs ..." % num_epochs)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
@@ -159,6 +162,7 @@ class BaseModel(object):
                     if val_data:
                         loss = self.eval(val_data, name='Validation')
                     if loss <= min_loss:
+                        self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
                         min_loss = loss
                         self.save()
             print("Training completed.")
@@ -168,6 +172,7 @@ class BaseModel(object):
             if val_data:
                 loss = self.eval(val_data, name='Validation')
             if loss <= min_loss:
+                self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
                 min_loss = loss
                 self.save()
             print("Stop the training by console!")
