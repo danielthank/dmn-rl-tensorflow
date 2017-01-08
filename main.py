@@ -91,7 +91,8 @@ def main(_):
         args.task = [int(args.task)]
     train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size)
     val = train.split_dataset(args.val_ratio)
-    print(train.count)
+    print("training count: {}".format(train.count))
+    print("testing count: {}".format(test.count))
 
     ## create params ##
     params_dict = vars(args)
