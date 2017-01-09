@@ -124,7 +124,6 @@ def main(_):
             raise Exception("Need to load an expert from expert_dir to run a learner!")
         expert_params = None
 
-    
     ## run action ##
     if args.action == 'train':
         main_model = MainModel(words, params, expert_params)
@@ -136,8 +135,8 @@ def main(_):
             raise Exception("Need a trained model to test!")
         main_model = MainModel(words, params, expert_params)
         main_model.eval(test, name='Test')
-        main_model.decode(test, sys.stdout, all=False)
-    
+        main_model.decode(test, sys.stdout, sys.stdin, all=False)
+
     elif args.action == 'rl':
         if not args.target == 'learner':
             raise Exception("Only learner can run rl action!")

@@ -23,7 +23,7 @@ class REN(BaseModel):
         question = tf.placeholder('int32', shape=[None, question_size], name='q')  # [num_batch, question_len]
         answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
         is_training = tf.placeholder(tf.bool)
-        # batch_size = tf.shape(input)[0]
+        batch_size = tf.shape(story)[0]
 
         normal_initializer = tf.random_normal_initializer(stddev=0.1)
         ones_initializer = tf.constant_initializer(1.0)

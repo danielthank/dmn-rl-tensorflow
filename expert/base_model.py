@@ -167,24 +167,80 @@ class BaseModel(object):
             sys.exit(0)
         self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
 
-    def decode(self, data, outputfile, all=True):
+    def _get_good_output(self, sent):
+        output = ''
+        for token in sent:
+            if token == 0:
+                break
+            output = output + self.words.idx2word[token] + ' '
+        return output.strip()
+
+    def decode(self, data, outputfile, inputfile, all=True):
         tqdm.write("Write decoded output...")
         num_batches = data.num_batches
         for _ in range(num_batches):
             batch = data.next_batch()
             feed_dict = self.get_feed_dict(batch, is_train=False)
             outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            for idx in range(len(outputs)):
-                content = "".join(self.words.idx2word[token]+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(self.words.idx2word[token]+' ' for token in batch[1][idx])
+            for idx in range(len(batch[0])):
+                print("Content:", file=outputfile)
+                for i, sent in enumerate(batch[0][idx]):
+                    if sent[0] == 0:
+                        break
+                    print(i+1, self._get_good_output(sent), file=outputfile)
+
+                print("Question:", self._get_good_output(batch[1][idx]), file=outputfile)
                 ans = self.words.idx2word[batch[2][idx]]
+                print("Ans: ", ans, file=outputfile)
                 p_ans = self.words.idx2word[np.argmax(outputs[idx])]
-                outputfile.write("Content: "+content.strip()+'\n')
-                outputfile.write("Question: "+question.strip()+'\n')
-                outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_A: "+p_ans+"\n\n")
+                print("Predict_A:", p_ans, file=outputfile)
+                print(file=outputfile)
+
             if not all:
                 break
         data.reset()
         tqdm.write("Finished")
+
+        for i, word in enumerate(self.words.idx2word):
+            print(i, word)
+
+        from data_helper.read_data import tokenize
+        while True:
+            story = np.zeros((1, self.params.story_size, self.params.sentence_size), dtype='int32')
+            question = np.zeros((1, self.params.question_size), dtype='int32')
+            answer = np.zeros((1,),  dtype='int32')
+            sentence_cnt = 0;
+            for line in inputfile:
+                tokens = tokenize(line)
+                if '?' in tokens:
+                    word_cnt = 0
+                    for token in tokens:
+                        if token in self.words.word2idx:
+                            question[0][word_cnt] = self.words.word2idx[token]
+                            word_cnt = word_cnt + 1
+                    break
+
+                word_cnt = 0
+                for token in tokens:
+                    if token in self.words.word2idx:
+                        story[0][sentence_cnt][word_cnt] = self.words.word2idx[token]
+                        word_cnt = word_cnt + 1
+                if word_cnt:
+                    sentence_cnt = sentence_cnt + 1;
+
+            batch = (story, question, answer)
+            print("Content:", file=outputfile)
+            for i, sent in enumerate(batch[0][0]):
+                if sent[0] == 0:
+                    break
+                print(i+1, self._get_good_output(sent), file=outputfile)
+            print("Question:", self._get_good_output(batch[1][0]), file=outputfile)
+            feed_dict = self.get_feed_dict((story, question, answer), is_train=False)
+            outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            p_ans = self.words.idx2word[np.argmax(outputs[0])]
+            order = np.argsort(outputs[0])[::-1]
+            print("Predict_A:", file=outputfile)
+            for i in range(5):
+                print(self.words.idx2word[order[i]], outputs[0][order[i]])
+            print(file=outputfile)
 
