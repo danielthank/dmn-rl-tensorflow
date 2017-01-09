@@ -118,7 +118,8 @@ def read_babi(task_ids, batch_size):
 
     for task_id in task_ids:
         if task_id == 3:
-            truncate_length = 130
+            # truncate_length = 130
+            truncate_length = 70
         else:
             truncate_length = 70
 

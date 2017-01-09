@@ -68,7 +68,7 @@ class REN(BaseModel):
                 activation=activation)
 
             self.output = tf.nn.softmax(logits)
-            predicts = tf.argmax(self.output, 1)
+            predicts = tf.argmax(logits, 1)
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, answer)
             self.total_loss = tf.reduce_mean(cross_entropy)
 
@@ -94,9 +94,9 @@ class REN(BaseModel):
             self.q = question
             self.y = answer
             self.is_training = is_training
-            corrects = tf.cast(tf.equal(tf.cast(predicts, 'int32'), answer), 'int32')
-            self.num_corrects = tf.reduce_sum(corrects)
-            self.accuracy = tf.reduce_mean(corrects)
+            corrects = tf.equal(tf.cast(predicts, 'int32'), answer)
+            num_corrects = tf.reduce_sum(tf.cast(corrects, tf.float32))
+            self.accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
 
             # Output Module
             if not forward_only:

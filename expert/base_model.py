@@ -65,9 +65,9 @@ class BaseModel(object):
             self.summary_writer = tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph)
 
         ## train & eval run output ##
-        self.train_list = [self.merged, self.opt_op, self.global_step] 
+        self.train_list = [self.merged, self.opt_op, self.global_step]
         self.eval_list = [self.total_loss, self.global_step, self.accuracy]
-    
+
     def __del__(self):
         if hasattr(self, "sess"):
             self.sess.close()
@@ -175,9 +175,9 @@ class BaseModel(object):
             feed_dict = self.get_feed_dict(batch, is_train=False)
             outputs = self.sess.run(self.output, feed_dict=feed_dict)
             for idx in range(len(outputs)):
-                content = "".join(token+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(token+' ' for token in batch[1][idx])
-                ans = batch[2][idx]
+                content = "".join(self.words.idx2word[token]+' ' for sent in batch[0][idx] for token in sent)
+                question = "".join(self.words.idx2word[token]+' ' for token in batch[1][idx])
+                ans = self.words.idx2word[batch[2][idx]]
                 p_ans = self.words.idx2word[np.argmax(outputs[idx])]
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
