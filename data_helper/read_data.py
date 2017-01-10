@@ -54,8 +54,8 @@ def get_tokenizer(stories, word_table):
     tokens_all = []
     for story, query, answer in stories:
         for sentence in story:
+            word_table.add_vocab(*sentence)
             word_table.count_doc(*sentence)
-            tokens_all.extend(sentence)
         tokens_all.extend(query + [answer])
     word_table.add_vocab(*tokens_all)
 

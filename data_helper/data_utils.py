@@ -58,8 +58,9 @@ class DataSet:
 class WordTable:
     def __init__(self, word2vec=None, embed_size=0):
         self.word2vec = word2vec
-        self.word2idx = {}
+        self.word2idx = {'<eos>': 0, '<go>': 1}
         self.word2dc = {}
+        self.idx2dc = {}
         self.all_doc_count = 0.
         self.idx2word = ['<eos>', '<go>']  # zero padding will be <eos>
         self.embed_size = embed_size
@@ -80,13 +81,20 @@ class WordTable:
         for word in words:
             if word not in self.word2dc:
                 self.word2dc[word] = 1.
+                self.idx2dc[self.word2idx[word]] = 1.
             elif word not in seen_words:
                 self.word2dc[word] += 1.
+                self.idx2dc[self.word2idx[word]] += 1.
                 seen_words.append(word)
         self.all_doc_count += 1.
 
-    def find_keyterm(self, *words):
+    def find_keyterm_by_word(self, *words):
         doc_counts = np.array([self.word2dc.get(word, np.inf) for word in words])
+        keyterm = words[np.argmin(doc_counts)]
+        return keyterm
+
+    def find_keyterm_by_idx(self, *words):
+        doc_counts = np.array([self.idx2dc.get(word, np.inf) for word in words])
         keyterm = words[np.argmin(doc_counts)]
         return keyterm
 

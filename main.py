@@ -93,6 +93,12 @@ def main(_):
     val = train.split_dataset(args.val_ratio)
     print("training count: {}".format(train.count))
     print("testing count: {}".format(test.count))
+    """
+    print("word2idx:", words.word2idx)
+    print("idx2word:", words.idx2word)
+    print("word2dc:", words.word2dc)
+    print("idx2dc:", words.idx2dc)
+    """
 
     ## create params ##
     params_dict = vars(args)
