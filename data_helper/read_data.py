@@ -135,6 +135,7 @@ def read_babi(task_ids, batch_size):
         test = tokenize_task(test, word_table)
 
         all_train.extend(train)
+        all_train.extend(test)
         all_test.extend(test)
 
     train = all_train

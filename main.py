@@ -16,13 +16,14 @@ from expert.ren import REN as EXPERT_REN
 
 from learner.dmn import DMN as LEARNER_DMN
 from learner.seq2seq import Seq2Seq as LEARNER_Seq2Seq
-
+from learner.ren import REN as LEARNER_REN
 
 ## accessible model ##
 MODEL = {'expert_dmn':      EXPERT_DMN,
          'expert_ren':      EXPERT_REN,
          'learner_dmn':     LEARNER_DMN,
-         'learner_seq2seq': LEARNER_Seq2Seq}
+         'learner_seq2seq': LEARNER_Seq2Seq,
+         'learner_ren':     LEARNER_REN}
 
 
 def load_params_dict(filename):
