@@ -99,6 +99,9 @@ def main(_):
     print("word2dc:", words.word2dc)
     print("idx2dc:", words.idx2dc)
     """
+    print("story size: {}".format(args.story_size))
+    print("sentence size: {}".format(args.sentence_size))
+    print("question size: {}".format(args.question_size))
 
     ## create params ##
     params_dict = vars(args)
