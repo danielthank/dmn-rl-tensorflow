@@ -114,7 +114,7 @@ class BaseModel(object):
     def get_rewards(self, batch, q_outputs):
         expert_entropys, expert_anses = self.ask_expert(batch, q_outputs)
         CQ_rewards = self.CQ_reward(batch[0], q_outputs)
-        tot_rewards = 0.5*CQ_rewards+0.5*(np.exp(expert_entropys)-0.5)
+        tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         return tot_rewards
 
     def pre_train_batch(self, batch):
@@ -154,16 +154,12 @@ class BaseModel(object):
         num_batches = train_data.num_batches
 
         min_loss = self.sess.run(self.min_validation_loss)
-        r = 0.
         print("Training %d epochs ..." % num_epochs)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch = train_data.next_batch()
-                    (summary, _, global_step), mean_r = self.train_batch(batch)
-                    r += mean_r
-                self.baseline = 0.9*self.baseline + 0.1*r/(params.acc_period*num_batches) if not self.baseline == 0. else r/(params.acc_period*num_batches)
-                r = 0.
+                    summary, _, global_step = self.train_batch(batch)
 
                 self.summary_writer.add_summary(summary, global_step)
                 train_data.reset()
@@ -192,6 +188,51 @@ class BaseModel(object):
                 self.save()
             print("Stop the training by console!")
 
+    def rl_train(self, train_data, val_data):
+        params = self.params
+        assert not self.action == 'test'
+        num_epochs = params.num_epochs
+        num_batches = train_data.num_batches
+
+        min_loss = self.sess.run(self.min_validation_loss)
+        r = 0.
+        print("Training %d epochs ..." % num_epochs)
+        try:
+            for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
+                for _ in range(num_batches):
+                    batch = train_data.next_batch()
+                    (summary, _, global_step), mean_r = self.train_batch(batch)
+                    r += mean_r
+                self.baseline = 0.9*self.baseline + 0.1*r/num_batches if not self.baseline == 0. else r/num_batches
+
+                self.summary_writer.add_summary(summary, global_step)
+                train_data.reset()
+
+                if (epoch_no + 1) % params.acc_period == 0:
+                    tqdm.write("")  # Newline for TQDM
+                    self.eval(train_data, name='Training')
+                    tqdm.write("rewards: "+str(r))
+
+                if (epoch_no + 1) % params.val_period == 0:
+                    loss = np.inf
+                    if val_data:
+                        loss = self.eval(val_data, name='Validation')
+                    if loss <= min_loss:
+                        self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
+                        min_loss = loss
+                        self.save()
+                r = 0.
+            print("Training completed.")
+
+        except KeyboardInterrupt:
+            loss = np.inf
+            if val_data:
+                loss = self.eval(val_data, name='Validation')
+            if loss <= min_loss:
+                self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
+                min_loss = loss
+                self.save()
+            print("Stop the training by console!")
 
     def eval(self, data, name):
         num_batches = data.num_batches

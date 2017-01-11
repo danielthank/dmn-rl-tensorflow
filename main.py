@@ -93,12 +93,10 @@ def main(_):
     val = train.split_dataset(args.val_ratio)
     print("training count: {}".format(train.count))
     print("testing count: {}".format(test.count))
-    """
     print("word2idx:", words.word2idx)
     print("idx2word:", words.idx2word)
     print("word2dc:", words.word2dc)
     print("idx2dc:", words.idx2dc)
-    """
     print("story size: {}".format(args.story_size))
     print("sentence size: {}".format(args.sentence_size))
     print("question size: {}".format(args.question_size))
@@ -113,7 +111,7 @@ def main(_):
         load_params = load_params_dict(params_filename)
         if not load_params['task'] == params.task:
             raise Exception("incompatible task with load model!")
-        if not load_params['target'] == params.target and load_params['arch'] == params.arch:
+        if (not load_params['target'] == params.target) or (not load_params['arch'] == params.arch):
             raise Exception("incompatible main model with load model!")
         params = params._replace(**load_params)
 
@@ -148,7 +146,7 @@ def main(_):
         if not args.target == 'learner':
             raise Exception("Only learner can run rl action!")
         main_model = MainModel(words, params, expert_params)
-        main_model.train(train, val)
+        main_model.rl_train(train, val)
         main_model.save_params()
 
 
