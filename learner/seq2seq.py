@@ -9,6 +9,7 @@ from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
 from learner.base_model import BaseModel
 from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
+from dmn_helper.episode_module import EpisodeModule
 from ren_helper.model_utils import get_sequence_length
 
 
@@ -309,12 +310,12 @@ class Seq2Seq(BaseModel):
 
         return encoding
 
-    def get_feed_dict(self, batches, feed_previous, is_training):
+    def get_feed_dict(self, batches, feed_previous, is_train):
         return {
             self.x: batches[0],
             self.q: batches[1],
             self.y: batches[2],
-            self.is_training: is_training,
+            self.is_training: is_train,
             self.feed_previous: feed_previous
         }
 

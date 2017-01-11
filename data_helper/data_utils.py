@@ -30,6 +30,13 @@ class DataSet:
         self.current_index += self.batch_size
         return xs, qs, ys
 
+    def get_batch_cnt(self, cnt):
+        from_, to = self.current_index, self.current_index + cnt
+        cur_idxs = self.indexes[from_:to]
+        xs, qs, ys = zip(*[[self.xs[i], self.qs[i], self.ys[i]] for i in cur_idxs])
+        self.current_index += self.batch_size
+        return xs, qs, ys
+
     def has_next_batch(self):
         return self.current_index + self.batch_size <= self.count
 

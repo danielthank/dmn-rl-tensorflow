@@ -90,7 +90,8 @@ def main(_):
         args.task = list(range(1, 21))
     else:
         args.task = [int(args.task)]
-    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size)
+    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size,
+                                                                                            args.target=='expert')
     val = train.split_dataset(args.val_ratio)
     print("training count: {}".format(train.count))
     print("testing count: {}".format(test.count))

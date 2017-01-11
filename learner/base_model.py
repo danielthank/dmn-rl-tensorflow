@@ -75,11 +75,12 @@ class BaseModel(object):
 
         ## train & eval run output ##
         if self.action == 'train':
-            self.train_list = [self.merged, self.Pre_opt_op, self.global_step]
+            # self.train_list = [self.merged, self.Pre_opt_op, self.global_step]
+            self.train_list = [self.merged, self.PreQA_OptOP, self.PreQG_OptOP, self.global_step]
         elif self.action == 'rl':
             self.train_list = [self.merged, self.RL_opt_op, self.global_step]
         if not self.action == 'rl':
-            self.eval_list = [self.total_loss, self.global_step]
+            self.eval_list = [self.QA_total_loss, self.QG_total_loss, self.global_step]
             self.test_batch = self.pre_test_batch
         else:
             self.eval_list = [self.J, self.global_step]
@@ -99,7 +100,7 @@ class BaseModel(object):
     def build(self):
         raise NotImplementedError()
 
-    def get_feed_dict(self, batch, is_train):
+    def get_feed_dict(self, batch, feed_previous, is_train):
         raise NotImplementedError()
 
     def save_params(self):
@@ -154,6 +155,24 @@ class BaseModel(object):
         num_batches = train_data.num_batches
 
         min_loss = self.sess.run(self.min_validation_loss)
+        print("Training 100 samples")
+        batch = train_data.get_batch_cnt(100)
+        for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
+            summary, _, _, global_step = self.train_batch(batch)
+            if (epoch_no + 1) % params.acc_period == 0:
+                tqdm.write("")  # Newline for TQDM
+                self.eval(train_data, name='Training')
+
+            if (epoch_no + 1) % params.val_period == 0:
+                loss = np.inf
+                if val_data:
+                    loss = self.eval(val_data, name='Validation')
+                if loss <= min_loss:
+                    self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
+                    min_loss = loss
+                    self.save()
+            print('complete')
+        """
         print("Training %d epochs ..." % num_epochs)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
@@ -187,6 +206,7 @@ class BaseModel(object):
                 min_loss = loss
                 self.save()
             print("Stop the training by console!")
+        """
 
     def rl_train(self, train_data, val_data):
         params = self.params
