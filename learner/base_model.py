@@ -90,7 +90,8 @@ class BaseModel(object):
         print("Loading Expert...")
         self.expert = self.load_expert(expert_params)
 
-    
+        self.baseline = 0.
+
     def __del__(self):
         if hasattr(self, "sess"):
             self.sess.close()
@@ -110,6 +111,12 @@ class BaseModel(object):
         assert outputs.shape == (self.params.batch_size, self.params.question_size)
         return outputs
 
+    def get_rewards(self, batch, q_outputs):
+        expert_entropys, expert_anses = self.ask_expert(batch, q_outputs)
+        CQ_rewards = self.CQ_reward(batch[0], q_outputs)
+        tot_rewards = 0.5*CQ_rewards+0.5*(np.exp(expert_entropys)-0.5)
+        return tot_rewards
+
     def pre_train_batch(self, batch):
         feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=True)
         return self.sess.run(self.train_list, feed_dict=feed_dict)
@@ -118,10 +125,12 @@ class BaseModel(object):
         A = self.words.vocab_size
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True)
         q_outputs = self.get_question(feed_dict)
-        rewards = self.CQ_reward(batch[0], q_outputs)
+
+        rewards = self.get_rewards(batch, q_outputs)
         chosen_one_hot = (np.arange(A) == q_outputs[:, :, None]).astype('float32')
-        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards})
-        return self.sess.run(self.train_list, feed_dict=feed_dict)
+
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
+        return self.sess.run(self.train_list, feed_dict=feed_dict), np.mean(rewards)
 
     def pre_test_batch(self, batch):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
@@ -131,9 +140,11 @@ class BaseModel(object):
         A = self.words.vocab_size
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
         q_outputs = self.get_question(feed_dict)
-        rewards = self.CQ_reward(batch[0], q_outputs)
+
+        rewards = self.get_rewards(batch, q_outputs)
         chosen_one_hot = (np.arange(A) == q_outputs[:, :, None]).astype('float32')
-        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards})
+
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
         return self.sess.run(self.eval_list, feed_dict=feed_dict)
 
     def train(self, train_data, val_data):
@@ -143,12 +154,16 @@ class BaseModel(object):
         num_batches = train_data.num_batches
 
         min_loss = self.sess.run(self.min_validation_loss)
+        r = 0.
         print("Training %d epochs ..." % num_epochs)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch = train_data.next_batch()
-                    summary, _, global_step = self.train_batch(batch)
+                    (summary, _, global_step), mean_r = self.train_batch(batch)
+                    r += mean_r
+                self.baseline = 0.9*self.baseline + 0.1*r/(params.acc_period*num_batches) if not self.baseline == 0. else r/(params.acc_period*num_batches)
+                r = 0.
 
                 self.summary_writer.add_summary(summary, global_step)
                 train_data.reset()
@@ -216,27 +231,25 @@ class BaseModel(object):
         return inverse_entropy, max_index
 
     def CQ_similarity(self, content, keyterm):
+        ## keyterm should be a word idx
         sent_cnt = 0.
         content_merge = []
         for sent in content:
             if sent[0] == 0:
                 break
-            content_merge += sent
+            content_merge.extend(sent)
             sent_cnt += 1.
         cnt = content_merge.count(keyterm)
         if cnt == 0.:
             return -1.
         else:
-            return content_merge.count(keyterm) / sent_cnt
+            return cnt / sent_cnt
 
     def CQ_reward(self, batch_x, qs_idxs):
         rewards = []
-        for q_idxs in qs_idxs:
-            pred_q = []
-            for idx in q_idxs:
-                pred_q.append(self.words.idx2word[idx])
-            keyterm = self.words.find_keyterm(*pred_q)
-            CQ_sim = self.CQ_similarity(batch_x, keyterm)
+        for b, q_idxs in enumerate(qs_idxs):
+            keyterm = self.words.find_keyterm_by_idx(*q_idxs)
+            CQ_sim = self.CQ_similarity(batch_x[b], keyterm)
             rewards.append(CQ_sim)
         return np.array(rewards).astype('float32')
 
@@ -250,8 +263,8 @@ class BaseModel(object):
             expert_entropys, expert_anses = self.ask_expert(batch, outputs)
             for idx, output in enumerate(outputs):
                 pred_q = [self.words.idx2word[token] for token in output]
-                keyterm = self.words.find_keyterm(*pred_q)
-                CQ_sim = self.CQ_similarity(batch[0][idx], self.words.word2idx[keyterm])
+                keyterm = self.words.find_keyterm_by_idx(*output)
+                CQ_sim = self.CQ_similarity(batch[0][idx], keyterm)
 
                 content = "".join(self.words.idx2word[token]+' ' for sent in batch[0][idx] for token in sent)
                 question = "".join(self.words.idx2word[token]+' ' for token in batch[1][idx])
@@ -262,7 +275,7 @@ class BaseModel(object):
                 outputfile.write("Content: "+content.strip()+'\n')
                 outputfile.write("Question: "+question.strip()+'\n')
                 outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_Q: "+pred_q.strip()+"\tKeyTerm: "+keyterm+"\tCount: "+str(CQ_sim)+'\n')
+                outputfile.write("Predict_Q: "+pred_q.strip()+"\tKeyTerm: "+self.words.idx2word[keyterm]+"\tCount: "+str(CQ_sim)+'\n')
                 outputfile.write("Expert Entropy: "+str(expert_entropy)+'\t'+expert_ans+"\n\n")
             if not all:
                 break

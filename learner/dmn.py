@@ -158,7 +158,7 @@ class DMN(BaseModel):
             act_probs = stack_q_probs * chosen_one_hot # [N, Q, A]
             act_probs = tf.reduce_prod(tf.reduce_sum(act_probs, axis=2), axis=1) # [N, Q, A] -> [N, Q] -> [N]
 
-            J = -1.*tf.reduce_sum(tf.log(act_probs+EPS)*rewards) + params.dmn_weight_decay*tf.add_n(tf.get_collection('l2'))
+            J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*rewards) + params.dmn_weight_decay*tf.add_n(tf.get_collection('l2'))
 
 
         # placeholders
