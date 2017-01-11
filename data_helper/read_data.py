@@ -1,5 +1,6 @@
 import os
 import re
+import random
 
 from data_helper.data_utils import DataSet, WordTable
 
@@ -118,7 +119,8 @@ def read_babi(task_ids, batch_size):
 
     for task_id in task_ids:
         if task_id == 3:
-            truncate_length = 130
+            # truncate_length = 130
+            truncate_length = 70
         else:
             truncate_length = 70
 
@@ -140,6 +142,8 @@ def read_babi(task_ids, batch_size):
 
     train = all_train
     test = all_test
+    random.shuffle(train)
+    random.shuffle(test)
 
     a = max([len(story) for story, _, _ in train])
     b = max([len(story) for story, _, _ in test])

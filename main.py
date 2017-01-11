@@ -46,12 +46,12 @@ parser.add_argument('--load_dir', default='')
 
 # training options
 parser.add_argument('--task', default='1', type=str, choices=[str(i) for i in range(1, 21)].append('all'))
-parser.add_argument('--batch_size', default=128, type=int)
+parser.add_argument('--batch_size', default=1024, type=int)
 parser.add_argument('--num_epochs', default=256, type=int)
 parser.add_argument('--learning_rate', default=0.002, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
-parser.add_argument('--acc_period', default=10, type=int)
-parser.add_argument('--val_period', default=40, type=int)
+parser.add_argument('--acc_period', default=1, type=int)
+parser.add_argument('--val_period', default=1, type=int)
 
 # dmn params
 parser.add_argument('--dmn_memory_step', default=3, type=int)
@@ -87,7 +87,7 @@ def main(_):
 
     ## data set ##
     if args.task == 'all':
-        args.task = range(1, 21)
+        args.task = list(range(1, 21))
     else:
         args.task = [int(args.task)]
     train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size)
@@ -125,7 +125,6 @@ def main(_):
             raise Exception("Need to load an expert from expert_dir to run a learner!")
         expert_params = None
 
-    
     ## run action ##
     if args.action == 'train':
         main_model = MainModel(words, params, expert_params)
@@ -137,8 +136,8 @@ def main(_):
             raise Exception("Need a trained model to test!")
         main_model = MainModel(words, params, expert_params)
         main_model.eval(test, name='Test')
-        main_model.decode(test, sys.stdout, all=False)
-    
+        main_model.decode(test, sys.stdout, sys.stdin, all=False)
+
     elif args.action == 'rl':
         if not args.target == 'learner':
             raise Exception("Only learner can run rl action!")
