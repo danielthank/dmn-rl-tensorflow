@@ -159,10 +159,10 @@ class BaseModel(object):
         batch = train_data.get_batch_cnt(100)
         for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
             summary, _, _, global_step = self.train_batch(batch)
-            if (epoch_no + 1) % params.acc_period == 0:
-                tqdm.write("")  # Newline for TQDM
-                self.eval(train_data, name='Training')
-
+            QA_loss, QG_loss, global_step = self.test_batch(batch)
+            tqdm.write("[Training] step {:d}, QA_Loss = {:.4f}, QG_Loss = {:.4f}".format(global_step, QA_loss, QG_loss))
+            
+            """
             if (epoch_no + 1) % params.val_period == 0:
                 loss = np.inf
                 if val_data:
@@ -171,6 +171,7 @@ class BaseModel(object):
                     self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
                     min_loss = loss
                     self.save()
+            """
             print('complete')
         """
         print("Training %d epochs ..." % num_epochs)

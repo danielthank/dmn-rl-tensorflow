@@ -19,14 +19,15 @@ EPS = 1e-20
 class Seq2Seq(BaseModel):
     def build(self, forward_only):
         params = self.params
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
 
         # initialize self
         # placeholders
-        input = tf.placeholder('int32', shape=[N, F, L], name='x')  # [num_batch, fact_count, sentence_len]
-        question = tf.placeholder('int32', shape=[N, Q], name='q')  # [num_batch, question_len]
-        answer = tf.placeholder('int32', shape=[N], name='y')  # [num_batch] - one word answer
+        input = tf.placeholder('int32', shape=[None, F, L], name='x')  # [num_batch, fact_count, sentence_len]
+        question = tf.placeholder('int32', shape=[None, Q], name='q')  # [num_batch, question_len]
+        answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
+        self.batch_size = tf.shape(answer)[0]
         fact_counts = get_sequence_length(input)
         is_training = tf.placeholder(tf.bool)
         feed_previous = tf.placeholder(tf.bool)
@@ -110,12 +111,12 @@ class Seq2Seq(BaseModel):
                 target_list = tf.unstack(tf.transpose(question)) # Q * [N]
                 # Cross-Entropy loss
                 QG_loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
-                                                   [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )
+                                                   [tf.ones(shape=tf.pack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
                 QG_total_loss = QG_loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Policy Gradient
-        chosen_one_hot = tf.placeholder(tf.float32, shape=[N, Q, A], name='act')
-        rewards = tf.placeholder(tf.float32, shape=[N], name='rewards')
+        chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
+        rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
 
         with tf.name_scope("PolicyGradient"):
             stack_q_probs = tf.stack(q_probs, axis=1) # Q * [N, A] -> [N, Q, A]
@@ -160,7 +161,7 @@ class Seq2Seq(BaseModel):
 
     def QA_branch(self, gru, ques_embed, f_outputs, is_training):
         params = self.params
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
         # question vector
         with tf.variable_scope('question_vec'):
@@ -203,13 +204,13 @@ class Seq2Seq(BaseModel):
 
     def QG_branch(self, embedding, ques_embed, q_init_state, feed_previous):
         params = self.params
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
+        L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
         ## output projection weight ##
         proj_w = weight('proj_w', [d, A])
         proj_b = bias('proj_b', A)
         ## build decoder inputs ##
-        go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
+        go_pad = tf.ones(tf.pack([self.batch_size, 1]), dtype=tf.int32)
         go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         decoder_inputs = tf.concat(1, [go_pad, ques_embed]) # [N, Q+1, V]
         decoder_inputs = tf.unstack(decoder_inputs, axis=1)[:-1] # Q * [N, V]
