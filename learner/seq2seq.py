@@ -155,9 +155,8 @@ class Seq2Seq(BaseModel):
         if forward_only:
             self.opt_op = None
         else:
-            self.RL_OptOP = self.RLOpt()
-            self.PreQA_OptOP = self.PreTrainQAOpt()
-            self.PreQG_OptOP = self.PreTrainQGOpt()
+            self.RL_opt_op = self.RLOpt()
+            self.Pre_opt_op = self.PreOpt()
 
     def QA_branch(self, gru, ques_embed, f_outputs, is_training):
         params = self.params
@@ -239,6 +238,28 @@ class Seq2Seq(BaseModel):
 
         return q_logprobs
 
+    def PreOpt(self):
+        with tf.name_scope("PreTrainOpt"):
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=5000,
+                                                  decay_rate=0.95,
+                                                  staircase=True)
+            OPTIMIZER_SUMMARIES = ["learning_rate",
+                                   "loss",
+                                   "gradients",
+                                   "gradient_norm"] if self.action == 'train' else []
+            opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss + self.QG_total_loss,
+                                                     self.global_step,
+                                                     learning_rate=self.params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=5.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn,
+                                                     summaries=OPTIMIZER_SUMMARIES)
+            return opt_op
+
+    """
     def PreTrainQAOpt(self):
         with tf.name_scope("PreTrainOpt"):
             def learning_rate_decay_fn(lr, global_step):
@@ -280,6 +301,7 @@ class Seq2Seq(BaseModel):
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
         return opt_op
+    """
 
     def RLOpt(self):
         with tf.name_scope("RLOpt"):

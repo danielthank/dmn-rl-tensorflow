@@ -76,7 +76,7 @@ class BaseModel(object):
         ## train & eval run output ##
         if self.action == 'train':
             # self.train_list = [self.merged, self.Pre_opt_op, self.global_step]
-            self.train_list = [self.merged, self.PreQA_OptOP, self.PreQG_OptOP, self.global_step]
+            self.train_list = [self.merged, self.Pre_opt_op, self.global_step]
         elif self.action == 'rl':
             self.train_list = [self.merged, self.RL_opt_op, self.global_step]
         if not self.action == 'rl':
@@ -158,7 +158,7 @@ class BaseModel(object):
         print("Training 100 samples")
         batch = train_data.get_batch_cnt(100)
         for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
-            summary, _, _, global_step = self.train_batch(batch)
+            summary,  _, global_step = self.train_batch(batch)
             QA_loss, QG_loss, global_step = self.test_batch(batch)
             tqdm.write("[Training] step {:d}, QA_Loss = {:.4f}, QG_Loss = {:.4f}".format(global_step, QA_loss, QG_loss))
             
