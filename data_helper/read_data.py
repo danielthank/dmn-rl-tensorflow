@@ -139,8 +139,7 @@ def read_babi(task_ids, batch_size, isexpert):
         all_train.extend(train)
         if isexpert:
             all_train.extend(test)
-        else:
-            all_test.extend(test)
+        all_test.extend(test)
 
     train = all_train
     test = all_test

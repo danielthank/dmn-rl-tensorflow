@@ -52,11 +52,13 @@ class BaseModel(object):
 
         ## init variables ##
         if not self.load_dir == '':
+            print("Loading model ...")
             self.load()
         else:
             summary_dir = os.path.join(self.save_dir, "summary")
             if tf.gfile.Exists(summary_dir):
                 tf.gfile.DeleteRecursively(summary_dir)
+            print("Init model ...")
             self.sess.run(self.init_op)
 
         ## init saver ##
@@ -65,8 +67,6 @@ class BaseModel(object):
             self.summary_writer = tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph)
 
         ## train & eval run output ##
-        self.train_list = [self.merged, self.opt_op, self.global_step]
-        self.eval_list = [self.total_loss, self.global_step, self.accuracy]
 
     def __del__(self):
         if hasattr(self, "sess"):
@@ -82,16 +82,18 @@ class BaseModel(object):
         raise NotImplementedError()
 
     def train_batch(self, feed_dict):
-        return self.sess.run([self.merged, self.opt_op, self.global_step], feed_dict=feed_dict)
+        train_list = [self.merged, self.opt_op, self.global_step]
+        return self.sess.run(train_list, feed_dict=feed_dict)
 
     def test_batch(self, feed_dict):
-        return self.sess.run(self.eval_list, feed_dict=feed_dict)
+        eval_list = [self.total_loss, self.global_step, self.accuracy]
+        return self.sess.run(eval_list, feed_dict=feed_dict)
 
     def output_by_question(self, batch, pred_qs):
         feed_dict = self.get_feed_dict(batch, is_train=False)
         feed_dict[self.q] = pred_qs
         output_probs = self.sess.run(self.output, feed_dict=feed_dict)
-        assert output_probs.shape == (self.params.batch_size, self.words.vocab_size)
+        assert output_probs.shape == (pred_qs.shape[0], self.words.vocab_size)
         return output_probs
 
     def train(self, train_data, val_data):
@@ -160,7 +162,6 @@ class BaseModel(object):
         self.saver.save(self.sess, os.path.join(self.save_dir, 'run'), self.global_step)
 
     def load(self):
-        print("Loading model ...")
         checkpoint = tf.train.get_checkpoint_state(self.load_dir)
         if checkpoint is None:
             print("Error: No saved model found. Please train first.")

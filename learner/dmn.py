@@ -176,10 +176,8 @@ class DMN(BaseModel):
         # tensors
         self.total_loss = total_loss
         self.J = J
-        self.output = q_probs
-        if forward_only:
-            self.opt_op = None
-        else:
+        self.q_probs = q_probs
+        if not forward_only:
             self.RL_opt_op = self.RLOpt()
             self.Pre_opt_op = self.PreTrainOpt()
 

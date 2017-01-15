@@ -14,6 +14,10 @@ from ren_helper.model_utils import get_sequence_length
 
 
 EPS = 1e-20
+OPTIMIZER_SUMMARIES = ["learning_rate",
+                       "loss",
+                       "gradients",
+                       "gradient_norm"]
 
 
 class Seq2Seq(BaseModel):
@@ -152,11 +156,10 @@ class Seq2Seq(BaseModel):
         self.J = J
 
         # optimizer ops
-        if forward_only:
-            self.opt_op = None
-        else:
-            self.RL_opt_op = self.RLOpt()
-            self.Pre_opt_op = self.PreOpt()
+        if not forward_only:
+            self.RL_opt_op, RL_opt_sc = self.RLOpt()
+            self.Pre_opt_op, Pre_opt_sc = self.PreOpt()
+            self.QA_opt_op, QA_opt_sc = self.QAOpt()
 
     def QA_branch(self, gru, ques_embed, f_outputs, is_training):
         params = self.params
@@ -239,29 +242,28 @@ class Seq2Seq(BaseModel):
         return q_logprobs
 
     def PreOpt(self):
-        with tf.name_scope("PreTrainOpt"):
+        with tf.variable_scope("PreOpt") as scope:
             def learning_rate_decay_fn(lr, global_step):
                 return tf.train.exponential_decay(lr,
                                                   global_step,
-                                                  decay_steps=5000,
+                                                  decay_steps=100,
                                                   decay_rate=0.95,
                                                   staircase=True)
             OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss",
-                                   "gradients",
-                                   "gradient_norm"] if self.action == 'train' else []
-            opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss + self.QG_total_loss,
+                                   "loss"]
+            opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss + 0.*self.QG_total_loss,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
+                                                     clip_gradients=1.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
-            return opt_op
+            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+                tf.add_to_collection("PRE_SUMM", var)
+            return opt_op, scope.name
 
-    """
-    def PreTrainQAOpt(self):
-        with tf.name_scope("PreTrainOpt"):
+    def QAOpt(self):
+        with tf.variable_scope("QAOpt") as scope:
             def learning_rate_decay_fn(lr, global_step):
                 return tf.train.exponential_decay(lr,
                                                   global_step,
@@ -269,9 +271,7 @@ class Seq2Seq(BaseModel):
                                                   decay_rate=0.95,
                                                   staircase=True)
             OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss",
-                                   "gradients",
-                                   "gradient_norm"] if self.action == 'train' else []
+                                   "loss"]
             opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
@@ -279,32 +279,12 @@ class Seq2Seq(BaseModel):
                                                      clip_gradients=5.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
-        return opt_op
-
-    def PreTrainQGOpt(self):
-        with tf.name_scope("PreTrainOpt"):
-            def learning_rate_decay_fn(lr, global_step):
-                return tf.train.exponential_decay(lr,
-                                                  global_step,
-                                                  decay_steps=5000,
-                                                  decay_rate=0.95,
-                                                  staircase=True)
-            OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss",
-                                   "gradients",
-                                   "gradient_norm"] if self.action == 'train' else []
-            opt_op = tf.contrib.layers.optimize_loss(self.QG_total_loss,
-                                                     self.global_step,
-                                                     learning_rate=self.params.learning_rate,
-                                                     optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn,
-                                                     summaries=OPTIMIZER_SUMMARIES)
-        return opt_op
-    """
+            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+                tf.add_to_collection("QA_SUMM", var)
+            return opt_op, scope.name
 
     def RLOpt(self):
-        with tf.name_scope("RLOpt"):
+        with tf.variable_scope("RLOpt") as scope:
             def learning_rate_decay_fn(lr, global_step):
                 return tf.train.exponential_decay(lr,
                                                   global_step,
@@ -312,9 +292,7 @@ class Seq2Seq(BaseModel):
                                                   decay_rate=0.95,
                                                   staircase=True)
             OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss",
-                                   "gradients",
-                                   "gradient_norm"] if self.action == 'rl' else []
+                                   "loss"]
             opt_op = tf.contrib.layers.optimize_loss(self.J,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
@@ -322,7 +300,9 @@ class Seq2Seq(BaseModel):
                                                      clip_gradients=5.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
-        return opt_op
+            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+                tf.add_to_collection("RL_SUMM", var)
+            return opt_op, scope.name
 
     def positional_encoding(self):
         V, L = self.params.dmn_embedding_size, self.params.sentence_size
