@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import rnn_cell
+from tensorflow.contrib import rnn
 from functools import partial
 
 from learner.base_model import BaseModel
@@ -76,15 +76,15 @@ class REN(BaseModel):
             proj_w = tf.get_variable('proj_w', [embedding_size, vocab_size])
             proj_b = tf.get_variable('proj_b', vocab_size)
             ## build decoder inputs ##
-            go_pad = tf.ones(shape = tf.pack([tf.shape(answer)[0], 1]), dtype = tf.int32)
-            decoder_inputs = tf.concat(1, [go_pad, question])
+            go_pad = tf.ones(shape = tf.stack([tf.shape(answer)[0], 1]), dtype = tf.int32)
+            decoder_inputs = tf.concat(axis=1, values=[go_pad, question])
             decoder_inputs = tf.nn.embedding_lookup(embedding_params_masked, decoder_inputs) 
             # [num_batch, Q+1, embedding_size]
             decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, num_batch, embedding_size]
             decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [num_batch, embedding_size]
-            decoder_inputs = [tf.concat(1, [de_inp, memory]) for de_inp in decoder_inputs]
+            decoder_inputs = [tf.concat(axis=1, values=[de_inp, memory]) for de_inp in decoder_inputs]
             ## question module rnn cell ##
-            q_cell = rnn_cell.GRUCell(embedding_size)
+            q_cell = rnn.GRUCell(embedding_size)
             ## decoder state init ##
             q_init_state = memory
             ## decoder loop function ##
@@ -92,7 +92,7 @@ class REN(BaseModel):
                 prev = tf.matmul(prev, proj_w) + proj_b
                 prev_symbol = tf.argmax(prev, 1)
                 emb_prev = tf.nn.embedding_lookup(embedding_params_masked, prev_symbol)
-                return tf.concat(1, [emb_prev, memory])
+                return tf.concat(axis=1, values=[emb_prev, memory])
             ## decoder rnn##
             def decoder(feed_previous_bool):
                 loop_function = _loop_fn if feed_previous_bool else None
@@ -113,7 +113,7 @@ class REN(BaseModel):
             ## seq loss ##
             target_list = tf.unstack(tf.transpose(question))
             total_loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
-                                                     [tf.ones(shape = tf.pack([tf.shape(answer)[0],])
+                                                     [tf.ones(shape = tf.stack([tf.shape(answer)[0],])
                                                               , dtype = tf.float32)] * question_size
                                                      )
 
@@ -166,7 +166,7 @@ class REN(BaseModel):
         with tf.variable_scope(scope, 'Encoding', initializer=initializer):
             _, _, max_sentence_length, _ = embedding.get_shape().as_list()
             positional_mask = tf.get_variable('positional_mask', [max_sentence_length, 1])
-            encoded_input = tf.reduce_sum(embedding * positional_mask, reduction_indices=[2])
+            encoded_input = tf.reduce_sum(embedding * positional_mask, axis=[2])
             return encoded_input
 
     def get_memory(self, last_state, answer_embedding, num_blocks,
@@ -178,25 +178,25 @@ class REN(BaseModel):
         [End-To-End Memory Networks](https://arxiv.org/abs/1502.01852).
         """
         with tf.variable_scope(scope, 'Memory', initializer=initializer):
-            last_state = tf.pack(tf.split(1, num_blocks, last_state), axis=1)
+            last_state = tf.stack(tf.split(axis=1, num_or_size_splits=num_blocks, value=last_state), axis=1)
             _, _, embedding_size = last_state.get_shape().as_list() # [num_batch, num_blocks, embedding_size]
 
             # Use the answer_embedding to attend over memories (hidden states of dynamic last_state cell blocks)
-            attention = tf.reduce_sum(last_state * answer_embedding, reduction_indices=[2]) # [num_batch, num_blocks]
+            attention = tf.reduce_sum(last_state * answer_embedding, axis=[2]) # [num_batch, num_blocks]
 
             # Subtract max for numerical stability (softmax is shift invariant)
-            attention_max = tf.reduce_max(attention, reduction_indices=[-1], keep_dims=True) # [num_batch, 1]
+            attention_max = tf.reduce_max(attention, axis=[-1], keep_dims=True) # [num_batch, 1]
             attention = tf.nn.softmax(attention - attention_max)
             attention = tf.expand_dims(attention, 2) # [num_batch, num_blocks, 1]
 
             # Weight memories by attention vectors
-            u = tf.reduce_sum(last_state * attention, reduction_indices=[1]) # [num_batch, embedding_size] 
+            u = tf.reduce_sum(last_state * attention, axis=[1]) # [num_batch, embedding_size] 
 
             # R acts as the decoder matrix to convert from internal state to the output vocabulary size
             #R = tf.get_variable('R', [embedding_size, vocab_size])
             H = tf.get_variable('H', [embedding_size, embedding_size])
 
-            a = tf.squeeze(answer_embedding, squeeze_dims=[1]) # [num_batch, embedding_size]
+            a = tf.squeeze(answer_embedding, axis=[1]) # [num_batch, embedding_size]
             memory = activation(a + tf.matmul(u, H))
             #y = tf.matmul(activation(q + tf.matmul(u, H)), R)
             return memory

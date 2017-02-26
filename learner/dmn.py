@@ -3,7 +3,7 @@ import json
 import numpy as np
 from tqdm import tqdm
 import tensorflow as tf
-from tensorflow.python.ops import rnn_cell
+from tensorflow.contrib import rnn
 
 from learner.base_model import BaseModel
 from dmn_helper.episode_module import EpisodeModule
@@ -33,7 +33,7 @@ class DMN(BaseModel):
         feed_previous = tf.placeholder(tf.bool)
 
         # Prepare parameters
-        gru = rnn_cell.GRUCell(d)
+        gru = rnn.GRUCell(d)
         l = self.positional_encoding()
         with tf.variable_scope('Embedding'):
             embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
@@ -82,7 +82,7 @@ class DMN(BaseModel):
                     else:
                         # ReLU update
                         c = episode.new(memory)
-                        concated = tf.concat(1, [memory, c, answer_vec])
+                        concated = tf.concat(axis=1, values=[memory, c, answer_vec])
 
                         w_t = weight('w_t', [3 * d, d])
                         z = tf.matmul(concated, w_t)
@@ -108,13 +108,13 @@ class DMN(BaseModel):
             proj_b = bias('proj_b', A)
             ## build decoder inputs ##
             go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
-            decoder_inputs = tf.concat(1, [go_pad, question])
+            decoder_inputs = tf.concat(axis=1, values=[go_pad, question])
             decoder_inputs = tf.nn.embedding_lookup(embedding, decoder_inputs) # [N, Q+1, V]
             decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, N, V]
             decoder_inputs = tf.unstack(decoder_inputs)[:-1] # Q * [N, V]
-            decoder_inputs = [tf.concat(1, [de_inp, memory]) for de_inp in decoder_inputs]
+            decoder_inputs = [tf.concat(axis=1, values=[de_inp, memory]) for de_inp in decoder_inputs]
             ## question module rnn cell ##
-            q_cell = rnn_cell.GRUCell(d)
+            q_cell = rnn.GRUCell(d)
             ## decoder state init ##
             q_init_state = memory
             ## decoder loop function ##
@@ -123,7 +123,7 @@ class DMN(BaseModel):
                 prev_symbol = tf.argmax(prev, 1)
                 #prev_symbol = gumbel_softmax(prev, axis=1)
                 emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
-                return tf.concat(1, [emb_prev, memory])
+                return tf.concat(axis=1, values=[emb_prev, memory])
             ## decoder ##
             def decoder(feed_previous_bool):
                 loop_function = _loop_fn if feed_previous_bool else None
@@ -143,7 +143,7 @@ class DMN(BaseModel):
             variable_summary(variables)
 
         with tf.name_scope('Loss'):
-            target_list = tf.unpack(tf.transpose(question)) # Q * [N]
+            target_list = tf.unstack(tf.transpose(question)) # Q * [N]
             # Cross-Entropy loss
             loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
                                                [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )

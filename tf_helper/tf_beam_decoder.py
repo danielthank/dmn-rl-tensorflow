@@ -53,7 +53,7 @@ def sparse_boolean_mask(tensor, mask):
     return tf.SparseTensor(
         indices=tf.where(left_shifted_mask),
         values=tf.boolean_mask(tensor, mask),
-        shape=tf.cast(tf.pack([mask_shape[0], tf.reduce_max(mask_lens)]), tf.int64) # For 2D only
+        shape=tf.cast(tf.stack([mask_shape[0], tf.reduce_max(mask_lens)]), tf.int64) # For 2D only
     )
 
 # %%
@@ -130,7 +130,7 @@ def batch_gather(params, indices, validate_indices=None,
 
     # TODO(nikita): consider using gather_nd. However as of 1/9/2017 gather_nd
     # has no gradients implemented.
-    flat_params = tf.reshape(params, tf.concat(0,[[batch_size_times_options_size], tf.shape(params)[2:]]))
+    flat_params = tf.reshape(params, tf.concat(axis=0,values=[[batch_size_times_options_size], tf.shape(params)[2:]]))
 
     indices_offsets = tf.reshape(tf.range(batch_size) * options_size, [-1] + [1] * (len(indices.get_shape())-1))
     indices_into_flat = indices + tf.cast(indices_offsets, indices.dtype)
@@ -146,13 +146,13 @@ class BeamFlattenWrapper(tf.nn.rnn_cell.RNNCell):
 
     def merge_batch_beam(self, tensor):
         remaining_shape = tf.shape(tensor)[2:]
-        res = tf.reshape(tensor, tf.concat(0, [[-1], remaining_shape]))
+        res = tf.reshape(tensor, tf.concat(axis=0, values=[[-1], remaining_shape]))
         res.set_shape(tf.TensorShape((None,)).concatenate(tensor.get_shape()[2:]))
         return res
 
     def unmerge_batch_beam(self, tensor):
         remaining_shape = tf.shape(tensor)[1:]
-        res = tf.reshape(tensor, tf.concat(0, [[-1, self.beam_size], remaining_shape]))
+        res = tf.reshape(tensor, tf.concat(axis=0, values=[[-1, self.beam_size], remaining_shape]))
         res.set_shape(tf.TensorShape((None,self.beam_size)).concatenate(tensor.get_shape()[1:]))
         return res
 
@@ -174,7 +174,7 @@ class BeamFlattenWrapper(tf.nn.rnn_cell.RNNCell):
         tensor_shape = tensor.get_shape().with_rank_at_least(1)
         new_tensor_shape = tensor_shape[:1].concatenate(self.beam_size).concatenate(tensor_shape[1:])
 
-        dynamic_tensor_shape = tf.unpack(tf.shape(tensor))
+        dynamic_tensor_shape = tf.unstack(tf.shape(tensor))
         res = tf.expand_dims(tensor, 1)
         res = tf.tile(res, [1, self.beam_size] + [1] * (tensor_shape.ndims-1))
         res = tf.reshape(res, [-1, self.beam_size] + list(dynamic_tensor_shape[1:]))
@@ -225,7 +225,7 @@ class BeamReplicateWrapper(tf.nn.rnn_cell.RNNCell):
         tensor_shape = tensor.get_shape().with_rank_at_least(1)
         new_tensor_shape = tensor_shape[:1].concatenate(self.beam_size).concatenate(tensor_shape[1:])
 
-        dynamic_tensor_shape = tf.unpack(tf.shape(tensor))
+        dynamic_tensor_shape = tf.unstack(tf.shape(tensor))
         res = tf.expand_dims(tensor, 1)
         res = tf.tile(res, [1, self.beam_size] + [1] * (tensor_shape.ndims-1))
         res = tf.reshape(res, [-1, self.beam_size] + list(dynamic_tensor_shape[1:]))
@@ -379,7 +379,7 @@ class BeamSearchHelper(object):
         first_in_beam_mask = tf.equal(tf.range(self.batch_size_times_beam_size) % self.beam_size, 0)
 
         beam_symbols = tf.fill([self.batch_size_times_beam_size, 0], tf.constant(self.stop_token, dtype=tf.int32))
-        beam_logprobs = tf.select(
+        beam_logprobs = tf.where(
             first_in_beam_mask,
             tf.fill([self.batch_size_times_beam_size], 0.0),
             tf.fill([self.batch_size_times_beam_size], self.INVALID_SCORE)
@@ -447,7 +447,7 @@ class BeamSearchHelper(object):
         parent_refs = indices // num_classes # [batch_size, self.beam_size]
 
         symbols_history = flat_batch_gather(past_beam_symbols, parent_refs, batch_size=self.batch_size, options_size=self.beam_size)
-        beam_symbols = tf.concat(1, [symbols_history, tf.reshape(symbols, [-1, 1])])
+        beam_symbols = tf.concat(axis=1, values=[symbols_history, tf.reshape(symbols, [-1, 1])])
 
         # Handle the output and the cell state shuffling
         next_cell_state = nest_map(
@@ -465,12 +465,12 @@ class BeamSearchHelper(object):
 
         logprobs_done_max = tf.reduce_max(logprobs_done, 1)
 
-        cand_symbols_unpadded = tf.select(logprobs_done_max > past_cand_logprobs,
+        cand_symbols_unpadded = tf.where(logprobs_done_max > past_cand_logprobs,
                                 done_symbols,
                                 past_cand_symbols)
         cand_logprobs = tf.maximum(logprobs_done_max, past_cand_logprobs)
 
-        cand_symbols = tf.concat(1, [cand_symbols_unpadded, tf.fill([self.batch_size, 1], self.stop_token)])
+        cand_symbols = tf.concat(axis=1, values=[cand_symbols_unpadded, tf.fill([self.batch_size, 1], self.stop_token)])
 
         # 4. Check the stopping criteria
 
@@ -518,7 +518,7 @@ class BeamSearchHelper(object):
         dense_symbols, logprobs = self.decode_dense()
         mask = tf.not_equal(dense_symbols, self.stop_token)
         if include_stop_tokens:
-            mask = tf.concat(1, [tf.ones_like(mask[:,:1]), mask[:,:-1]])
+            mask = tf.concat(axis=1, values=[tf.ones_like(mask[:,:1]), mask[:,:-1]])
         return sparse_boolean_mask(dense_symbols, mask), logprobs
 # %%
 

@@ -8,7 +8,7 @@ class EpisodeModule:
     """ Inner GRU module in episodic memory that creates episode vector. """
     def __init__(self, num_hidden, question, facts, is_training, bn):
         self.question = question
-        self.facts = tf.unpack(tf.transpose(facts, [1, 0, 2]))  # F x [N, d]
+        self.facts = tf.unstack(tf.transpose(facts, [1, 0, 2]))  # F x [N, d]
         self.num_hidden = num_hidden
         self.gru = AttnGRU(num_hidden, is_training, bn)
         with tf.variable_scope('w1b1w2b2'):
@@ -47,7 +47,7 @@ class EpisodeModule:
         with tf.name_scope('attention') as scope:
             # NOTE THAT instead of L1 norm we used L2
             q = self.question
-            vec = tf.concat(1, [f * q, f * m, tf.abs(f - q), tf.abs(f - m)])  # [N, 4*d]
+            vec = tf.concat(axis=1, values=[f * q, f * m, tf.abs(f - q), tf.abs(f - m)])  # [N, 4*d]
             # attention learning
             l1 = tf.matmul(vec, self.w1) + self.b1
             l1 = tf.nn.tanh(l1)

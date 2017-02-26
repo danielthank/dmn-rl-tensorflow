@@ -3,9 +3,9 @@ import json
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
-from tensorflow.python.ops import rnn_cell
-#from tensorflow.contrib.rnn import static_bidirectional_rnn
-from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
+from tensorflow.contrib import rnn
+from tensorflow.contrib.rnn import static_bidirectional_rnn
+#from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
 from learner.base_model import BaseModel
 from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
@@ -37,7 +37,7 @@ class Seq2Seq(BaseModel):
         feed_previous = tf.placeholder(tf.bool)
 
         # Prepare parameters
-        gru = rnn_cell.GRUCell(d)
+        gru = rnn.GRUCell(d)
         l = self.positional_encoding()
         with tf.variable_scope('Embedding'):
             embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
@@ -93,7 +93,7 @@ class Seq2Seq(BaseModel):
 
             with tf.name_scope('QA_Loss'):
                 # Cross-Entropy loss
-                QA_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(QA_ans_logits, answer)
+                QA_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=QA_ans_logits, labels=answer)
                 QA_loss = tf.reduce_mean(QA_cross_entropy)
                 QA_total_loss = QA_loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
@@ -115,7 +115,7 @@ class Seq2Seq(BaseModel):
                 target_list = tf.unstack(tf.transpose(question)) # Q * [N]
                 # Cross-Entropy loss
                 QG_loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
-                                                   [tf.ones(shape=tf.pack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
+                                                   [tf.ones(shape=tf.stack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
                 QG_total_loss = QG_loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Policy Gradient
@@ -181,7 +181,7 @@ class Seq2Seq(BaseModel):
                     else:
                         # ReLU update
                         c = episode.new(memory)
-                        concated = tf.concat(1, [memory, c, question_vec])
+                        concated = tf.concat(axis=1, values=[memory, c, question_vec])
 
                         w_t = weight('w_t', [3 * d, d])
                         z = tf.matmul(concated, w_t)
@@ -212,12 +212,12 @@ class Seq2Seq(BaseModel):
         proj_w = weight('proj_w', [d, A])
         proj_b = bias('proj_b', A)
         ## build decoder inputs ##
-        go_pad = tf.ones(tf.pack([self.batch_size, 1]), dtype=tf.int32)
+        go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
         go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
-        decoder_inputs = tf.concat(1, [go_pad, ques_embed]) # [N, Q+1, V]
+        decoder_inputs = tf.concat(axis=1, values=[go_pad, ques_embed]) # [N, Q+1, V]
         decoder_inputs = tf.unstack(decoder_inputs, axis=1)[:-1] # Q * [N, V]
         ## question module rnn cell ##
-        q_cell = rnn_cell.GRUCell(d)
+        q_cell = rnn.GRUCell(d)
         ## decoder loop function ##
         def _loop_fn(prev, i):
             prev = tf.matmul(prev, proj_w) + proj_b

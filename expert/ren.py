@@ -69,7 +69,7 @@ class REN(BaseModel):
 
             self.output = tf.nn.softmax(logits)
             predicts = tf.argmax(logits, 1)
-            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, answer)
+            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=answer)
             self.total_loss = tf.reduce_mean(cross_entropy)
 
             if not forward_only:
@@ -113,7 +113,7 @@ class REN(BaseModel):
         with tf.variable_scope(scope, 'Encoding', initializer=initializer):
             _, _, max_sentence_length, _ = embedding.get_shape().as_list()
             positional_mask = tf.get_variable('positional_mask', [max_sentence_length, 1])
-            encoded_input = tf.reduce_sum(embedding * positional_mask, reduction_indices=[2])
+            encoded_input = tf.reduce_sum(embedding * positional_mask, axis=[2])
             return encoded_input
 
     def get_output(self, last_state, encoded_question, num_blocks, vocab_size,
@@ -125,25 +125,25 @@ class REN(BaseModel):
         [End-To-End Memory Networks](https://arxiv.org/abs/1502.01852).
         """
         with tf.variable_scope(scope, 'Output', initializer=initializer):
-            last_state = tf.pack(tf.split(1, num_blocks, last_state), axis=1)
+            last_state = tf.stack(tf.split(axis=1, num_or_size_splits=num_blocks, value=last_state), axis=1)
             _, _, embedding_size = last_state.get_shape().as_list()
 
             # Use the encoded_query to attend over memories (hidden states of dynamic last_state cell blocks)
-            attention = tf.reduce_sum(last_state * encoded_question, reduction_indices=[2])
+            attention = tf.reduce_sum(last_state * encoded_question, axis=[2])
 
             # Subtract max for numerical stability (softmax is shift invariant)
-            attention_max = tf.reduce_max(attention, reduction_indices=[-1], keep_dims=True)
+            attention_max = tf.reduce_max(attention, axis=[-1], keep_dims=True)
             attention = tf.nn.softmax(attention - attention_max)
             attention = tf.expand_dims(attention, 2)
 
             # Weight memories by attention vectors
-            u = tf.reduce_sum(last_state * attention, reduction_indices=[1])
+            u = tf.reduce_sum(last_state * attention, axis=[1])
 
             # R acts as the decoder matrix to convert from internal state to the output vocabulary size
             R = tf.get_variable('R', [embedding_size, vocab_size])
             H = tf.get_variable('H', [embedding_size, embedding_size])
 
-            q = tf.squeeze(encoded_question, squeeze_dims=[1])
+            q = tf.squeeze(encoded_question, axis=[1])
             y = tf.matmul(activation(q + tf.matmul(u, H)), R)
             return y
 
