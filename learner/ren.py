@@ -2,8 +2,8 @@ import os
 import json
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib import rnn
 from functools import partial
+from tensorflow.contrib import rnn
 
 from learner.base_model import BaseModel
 from ren_helper.activations import prelu
@@ -98,7 +98,7 @@ class REN(BaseModel):
                 loop_function = _loop_fn if feed_previous_bool else None
                 reuse = None if feed_previous_bool else True
                 with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
-                    q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                    q_outputs, _ = tf.contrib.legacy_seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
                                                              initial_state=q_init_state,
                                                              cell=q_cell,
                                                              loop_function=loop_function)
@@ -112,7 +112,7 @@ class REN(BaseModel):
            
             ## seq loss ##
             target_list = tf.unstack(tf.transpose(question))
-            total_loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
+            total_loss = tf.contrib.legacy_seq2seq.sequence_loss(q_logprobs, target_list,
                                                      [tf.ones(shape = tf.stack([tf.shape(answer)[0],])
                                                               , dtype = tf.float32)] * question_size
                                                      )

@@ -2,10 +2,8 @@ import os
 import json
 import numpy as np
 import tensorflow as tf
-from tqdm import tqdm
 from tensorflow.contrib import rnn
 from tensorflow.contrib.rnn import static_bidirectional_rnn
-#from tensorflow.contrib.rnn import stack_bidirectional_dynamic_rnn
 
 from learner.base_model import BaseModel
 from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
@@ -28,9 +26,9 @@ class Seq2Seq(BaseModel):
 
         # initialize self
         # placeholders
-        input = tf.placeholder('int32', shape=[None, F, L], name='x')  # [num_batch, fact_count, sentence_len]
-        question = tf.placeholder('int32', shape=[None, Q], name='q')  # [num_batch, question_len]
-        answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
+        input = tf.placeholder('int32', shape=[None, F, L], name='x')
+        question = tf.placeholder('int32', shape=[None, Q], name='q')
+        answer = tf.placeholder('int32', shape=[None], name='y')
         self.batch_size = tf.shape(answer)[0]
         fact_counts = get_sequence_length(input)
         is_training = tf.placeholder(tf.bool)
@@ -39,6 +37,7 @@ class Seq2Seq(BaseModel):
         # Prepare parameters
         gru = rnn.GRUCell(d)
         l = self.positional_encoding()
+
         with tf.variable_scope('Embedding'):
             embedding = weight('embedding', [A, V], init='uniform', range=3**(1/2))
             embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
@@ -46,45 +45,24 @@ class Seq2Seq(BaseModel):
             variable_summary([embedding])
 
         with tf.name_scope('Tied_SentenceReader'):
-            input_embed = tf.nn.embedding_lookup(embedding, input) # [N, F, L] -> [N, F, L, V]
+            input_embed = tf.nn.embedding_lookup(embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
             # apply positional encoding
             encoded = l * input_embed
-            facts = tf.reduce_sum(encoded, 2)  # [N, F, V]
+            facts = tf.reduce_sum(encoded, 2)  # [batch, story, embedding_size]
             # dropout
-            facts = dropout(facts, params.dmn_keep_prob, is_training)
-
-        with tf.name_scope('Tied_InputFusion') as scope:
-            # Bidirectional RNN
-            """
-            f_outputs, fw_states, bw_states = stack_bidirectional_dynamic_rnn([gru],
-                                                                              [gru],
-                                                                              facts,
-                                                                              sequence_length=fact_counts,
-                                                                              dtype=tf.float32)
-            # facts: [N, F, d*2]
-            gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope)]
-            variable_summary(gru_variables)
-            f_outputs = tf.split(2, 2, f_outputs) # [N, F, d*2] -> 2*[N, F, d]
-            f_outputs = f_outputs[0] + f_outputs[1]
-            """
-            with tf.variable_scope('Forward') as scope:
-                fw_output, fw_state = tf.nn.dynamic_rnn(gru, facts, fact_counts, dtype=tf.float32)
-                gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-                variable_summary(gru_variables)
-            with tf.variable_scope('Backward') as scope:
-                facts_reverse = tf.reverse_sequence(facts, fact_counts, 1)
-                bw_output, bw_state = tf.nn.dynamic_rnn(gru, facts_reverse, fact_counts, dtype=tf.float32)
-                bw_output_rev = tf.reverse_sequence(bw_output, fact_counts, 1)
-                gru_variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-                variable_summary(gru_variables)
-            # Use forward and backward states both for QA branch
-            f_outputs = fw_output + bw_output_rev # [N, F, D]
-            # QG branch init state [N, d]
-            #q_init_state = fw[0] + bw[0]
-            q_init_state = fw_state + bw_output[:, 0, :] # [N, d]
+            # facts = dropout(facts, params.dmn_keep_prob, is_training)
 
         with tf.variable_scope('Question_embed'):
             ques_embed = tf.nn.embedding_lookup(embedding, question) # [N, Q, V]
+        
+        with tf.variable_scope('InputFusion') as scope:
+            (output_fw, output_bw), (state_fw, state_bw) = tf.nn.bidirectional_dynamic_rnn(gru,
+                                                                             gru,
+                                                                             facts,
+                                                                             sequence_length=fact_counts,
+                                                                             dtype=tf.float32)
+            f_outputs = output_fw + output_bw
+            q_init_state = state_fw + state_bw
 
         ## QA Branch
         with tf.variable_scope('QA_branch'):
@@ -114,7 +92,7 @@ class Seq2Seq(BaseModel):
             with tf.name_scope('QG_Loss'):
                 target_list = tf.unstack(tf.transpose(question)) # Q * [N]
                 # Cross-Entropy loss
-                QG_loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
+                QG_loss = tf.contrib.legacy_seq2seq.sequence_loss(q_logprobs, target_list,
                                                    [tf.ones(shape=tf.stack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
                 QG_total_loss = QG_loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
@@ -163,46 +141,21 @@ class Seq2Seq(BaseModel):
 
     def QA_branch(self, gru, ques_embed, f_outputs, is_training):
         params = self.params
-        L, Q, F = params.sentence_size, params.question_size, params.story_size
-        V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
-        # question vector
-        with tf.variable_scope('question_vec'):
-            ques_embed_list = tf.unstack(ques_embed, axis=1) # Q * [N, V]
-            _, question_vec = tf.nn.rnn(gru, ques_embed_list, dtype=tf.float32) # [N, d]
-        # Episodic Memory
-        with tf.variable_scope('Episodic'):
-            episode = EpisodeModule(d, question_vec, f_outputs, is_training, params.dmn_batch_norm)
-            memory = tf.identity(question_vec) # [N, d]
+        sentence_size, question_size, story_size = params.sentence_size, params.question_size, params.story_size
+        vocab_size = self.words.vocab_size
+        embedding_size = params.dmn_embedding_size
+        hidden_size = params.dmn_embedding_size
 
-            for t in range(params.dmn_memory_step):
-                with tf.variable_scope('Layer%d' % t) as scope:
-                    if params.dmn_memory_update == 'gru':
-                        memory = gru(episode.new(memory), memory)[0]
-                    else:
-                        # ReLU update
-                        c = episode.new(memory)
-                        concated = tf.concat(axis=1, values=[memory, c, question_vec])
-
-                        w_t = weight('w_t', [3 * d, d])
-                        z = tf.matmul(concated, w_t)
-                        if params.dmn_batch_norm:
-                            z = batch_norm(z, is_training)
-                        else:
-                            b_t = bias('b_t', d)
-                            z = z + b_t
-                        memory = tf.nn.relu(z)  # [N, d]
-
-        # Regularizations
-        if params.dmn_batch_norm:
-            memory = batch_norm(memory, is_training=is_training)
-        memory = dropout(memory, params.dmn_keep_prob, is_training)
-
-        with tf.name_scope('QA_Answer'):
-            # Answer module : feed-forward version (for it is one word answer)
-            w_a = weight('w_a', [d, A], init='xavier')
-            QA_ans_logits = tf.matmul(memory, w_a)  # [N, A]
-
-        return QA_ans_logits
+        decoder_input = tf.unstack(ques_embed, axis=1)
+        init_state = tf.zeros(shape=[self.batch_size, hidden_size], dtype=tf.float32)
+ 
+        _, state = tf.contrib.legacy_seq2seq.attention_decoder(decoder_input,
+                                                               init_state,
+                                                               f_outputs,
+                                                               gru)
+        W = tf.get_variable('hidden2vocab', shape=[hidden_size, vocab_size])
+        ans_logits = tf.matmul(state, W)
+        return ans_logits
 
     def QG_branch(self, embedding, ques_embed, q_init_state, feed_previous):
         params = self.params
@@ -229,7 +182,7 @@ class Seq2Seq(BaseModel):
             loop_function = _loop_fn if feed_previous_bool else None
             reuse = None if feed_previous_bool else True
             with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
-                q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                q_outputs, _ = tf.contrib.legacy_seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
                                                          initial_state=q_init_state,
                                                          cell=q_cell,
                                                          loop_function=loop_function)
@@ -251,7 +204,7 @@ class Seq2Seq(BaseModel):
                                                   staircase=True)
             OPTIMIZER_SUMMARIES = ["learning_rate",
                                    "loss"]
-            opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss + 0.*self.QG_total_loss,
+            opt_op = tf.contrib.layers.optimize_loss(0.5*self.QA_total_loss + 0.5*self.QG_total_loss,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,

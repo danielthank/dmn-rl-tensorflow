@@ -104,8 +104,8 @@ class BaseModel(object):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
         learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         CQ_rewards = self.CQ_reward(batch[0], pred_qs)
-        tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
-        #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
+        #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
+        tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         return tot_rewards, expert_anses
 
     def pre_train_batch(self, batch):
@@ -159,7 +159,7 @@ class BaseModel(object):
         num_batches = train_data.num_batches
 
         print("Pre-Training on 100 samples")
-        batch = train_data.get_batch_cnt(100)
+        batch = train_data.get_batch_cnt(500)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 summ,  _, global_step = self.pre_train_batch(batch)
