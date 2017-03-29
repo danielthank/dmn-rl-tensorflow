@@ -3,7 +3,7 @@ import pickle
 import copy
 import os
 import numpy as np
-
+import math
 class DataSet:
     def __init__(self, batch_size, xs, qs, ys, shuffle=True, name="dataset"):
         assert batch_size <= len(xs), "batch size cannot be greater than data size."
@@ -22,12 +22,21 @@ class DataSet:
         self.num_batches = int(self.count / self.batch_size)
         self.reset()
 
-    def next_batch(self):
-        assert self.has_next_batch(), "End of epoch. Call 'complete_epoch()' to reset."
-        from_, to = self.current_index, self.current_index + self.batch_size
+    def next_batch(self,full_batch = True):
+        '''
+        if full batch is True, 
+            return data with batch size
+        else, 
+            when the rest data is not enough, still see it as a batch
+        '''
+        assert self.has_next_batch(full_batch), "End of epoch. Call 'complete_epoch()' to reset."
+        if full_batch :
+            from_, to = self.current_index, self.current_index + self.batch_size
+        else:
+            from_, to = self.current_index, min(self.current_index + self.batch_size,self.count)
         cur_idxs = self.indexes[from_:to]
         xs, qs, ys = zip(*[[self.xs[i], self.qs[i], self.ys[i]] for i in cur_idxs])
-        self.current_index += self.batch_size
+        self.current_index = to
         return xs, qs, ys
 
     def get_batch_cnt(self, cnt):
@@ -37,8 +46,11 @@ class DataSet:
         self.current_index += self.batch_size
         return xs, qs, ys
 
-    def has_next_batch(self):
-        return self.current_index + self.batch_size <= self.count
+    def has_next_batch(self,full_batch):
+        if full_batch:
+            return self.current_index + self.batch_size <= self.count
+        else:
+            return self.current_index < self.count
 
     def split_dataset(self, split_ratio):
         """ Splits a data set by split_ratio.
@@ -56,12 +68,38 @@ class DataSet:
         self.count = end_index
         self.setup()
         return val_set
-
+    
+    def get_batch_num(self,full_batch = True):
+        '''
+            use this function is better than access num_batches directly
+        '''
+        if full_batch or self.count%self.batch_size == 0:
+            return self.num_batches
+        else:
+            return self.num_batches + 1
+    
     def reset(self):
         self.current_index = 0
         if self.shuffle:
             np.random.shuffle(self.indexes)
+    
+    def __getitem__(self,key):
+        
+        # do not (deep) copy data - just modify index list!
+        val_set = copy.copy(self)
+        if isinstance(key,slice):
+            start = 0 if key.start == None else key.start
+            stop = self.count if key.stop == None else key.stop
+            step = 1 if key.step == None else key.step 
+            
+            val_set.count = int((stop - start)/step)
+            val_set.indexes = [self.indexes[i] for i in range(start,stop,step)]
+            val_set.num_batches = int(val_set.count / val_set.batch_size)
+            return val_set
+        else:
+            raise NotImplementedError
 
+       
 class WordTable:
     def __init__(self, word2vec=None, embed_size=0):
         self.word2vec = word2vec

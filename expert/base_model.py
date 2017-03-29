@@ -100,14 +100,14 @@ class BaseModel(object):
         assert self.action == 'train'
         params = self.params
         num_epochs = params.num_epochs
-        num_batches = train_data.num_batches
+        num_batches = train_data.get_batch_num(full_batch=False)
 
         min_loss = self.sess.run(self.min_validation_loss)
         print("Training %d epochs ..." % num_epochs)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
-                    batch = train_data.next_batch()
+                    batch = train_data.next_batch(full_batch = False)
                     feed_dict = self.get_feed_dict(batch, is_train=True)
                     summary, _, global_step = self.train_batch(feed_dict)
 
@@ -140,11 +140,11 @@ class BaseModel(object):
 
 
     def eval(self, data, name):
-        num_batches = data.num_batches
+        num_batches = data.get_batch_num(full_batch = False)
         losses = []
         accs = []
         for _ in range(num_batches):
-            batch = data.next_batch()
+            batch = data.next_batch(full_batch = False)
             feed_dict = self.get_feed_dict(batch, is_train=False)
             batch_loss, global_step, batch_acc = self.test_batch(feed_dict)
             losses.append(batch_loss)
@@ -152,6 +152,14 @@ class BaseModel(object):
         data.reset()
         loss = np.mean(losses)
         acc = np.mean(accs)
+        
+        if name == 'Training':
+            self.train_acc = acc
+        elif name == 'Validation':
+            self.val_acc = acc
+        elif name == 'Test':
+            self.test_acc = acc
+
         tqdm.write("[%s] step %d, Loss = %.4f, Acc = %.4f" % \
               (name, global_step, loss, acc))
         return loss
