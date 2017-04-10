@@ -97,7 +97,7 @@ class BaseModel(object):
     def get_question(self, feed_dict):
         q_probs = self.sess.run(self.q_probs, feed_dict=feed_dict)
         q_idxes = np.argmax(np.stack(q_probs, axis=1), axis=2)
-        assert q_idxes.shape == (self.params.batch_size, self.params.question_size)
+        # assert q_idxes.shape == (self.params.batch_size, self.params.question_size)
         return q_idxes
 
     def get_rewards(self, batch, pred_qs):
@@ -105,7 +105,8 @@ class BaseModel(object):
         learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         CQ_rewards = self.CQ_reward(batch[0], pred_qs)
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
-        tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
+        # tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
+        tot_rewards = np.exp(expert_entropys)
         return tot_rewards, expert_anses
 
     def pre_train_batch(self, batch):
@@ -126,13 +127,22 @@ class BaseModel(object):
         rewards, expert_anses = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
-        rl_train_list = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
+        #rl_train_list = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
+        rl_train_list = [self.merged_RL, self.global_step, self.global_step, self.J]
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
-        return self.sess.run(rl_train_list, feed_dict=feed_dict), np.mean(rewards), pred_qs, expert_anses
+        return self.sess.run(rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses
 
     def pre_test_batch(self, batch):
         pre_eval_list = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
+
+        pred_qs = self.get_question(feed_dict)
+        for idx, output in enumerate(pred_qs):
+            pred_q = [self.words.idx2word[token] for token in output]
+            pred_q = "".join(token+' ' for token in pred_q)
+            print("Predict_Q: "+pred_q.strip())
+            break
+
         return self.sess.run(pre_eval_list, feed_dict=feed_dict)
 
     def QA_test_batch(self, batch):
@@ -159,7 +169,7 @@ class BaseModel(object):
         num_batches = train_data.num_batches
 
         print("Pre-Training on 100 samples")
-        batch = train_data.get_batch_cnt(500)
+        batch = train_data.get_batch_cnt(256)
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 summ,  _, global_step = self.pre_train_batch(batch)
@@ -168,6 +178,9 @@ class BaseModel(object):
                 tqdm.write("[Training] step {:d}, QA_Loss = {:.4f}, QG_Loss = {:.4f}, ACC = {:.4f}".format(global_step, QA_loss, QG_loss, acc))
                 self.summary_writer.add_summary(summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
+                if (epoch_no + 1) % params.acc_period == 0:
+                    if val_data:
+                        val_loss = self.eval(val_data, name='Validation')
         except KeyboardInterrupt:
             print("Stop the training by console!")
         self.save()
@@ -192,19 +205,28 @@ class BaseModel(object):
                 tot_QA_acc = []
                 for i in range(num_batches):
                     batch = train_data.next_batch()
-                    (rl_summ, _, global_step, J), mean_r, pred_qs, expert_anses = self.rl_train_batch(batch)
+                    (rl_summ, _, global_step, J), r_all, pred_qs, expert_anses = self.rl_train_batch(batch)
+                    mean_r = np.mean(r_all)
+                    if i == 0:
+                        for idx, output in enumerate(pred_qs):
+                            pred_q = [self.words.idx2word[token] for token in output]
+                            pred_q = "".join(token+' ' for token in pred_q)
+                            print("Predict_Q: "+pred_q.strip(), 'Reward:', r_all[0])
+                            break
                     r.append(mean_r)
                     tot_J.append(J)
                     QA_batch_x = np.concatenate((QA_batch_x, batch[0]), axis=0)
                     QA_batch_q = np.concatenate((QA_batch_q, pred_qs), axis=0)
                     QA_batch_y = np.concatenate((QA_batch_y, expert_anses), axis=0)
-                    if i % 3 == 0:
+                    if i % 1 == 0:
                         QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_batch_x, QA_batch_q, QA_batch_y))
                         tot_QA_loss.append(QA_loss)
                         tot_QA_acc.append(acc)
+                        """
                         QA_batch_x = np.empty((0, params.story_size, params.sentence_size), dtype='int32')
                         QA_batch_q = np.empty((0, params.question_size), dtype='int32')
                         QA_batch_y = np.empty((0, ), dtype='int32')
+                        """
 
                 self.baseline = 0.9*self.baseline + 0.1*np.mean(r) if not self.baseline == 0. else np.mean(r)
 
