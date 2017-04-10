@@ -198,9 +198,9 @@ class BaseModel(object):
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 r = []
                 tot_J = []
-                QA_batch_x = np.empty((0, params.story_size, params.sentence_size), dtype='int32')
-                QA_batch_q = np.empty((0, params.question_size), dtype='int32')
-                QA_batch_y = np.empty((0, ), dtype='int32')
+                QA_x = np.empty((0, params.story_size, params.sentence_size), dtype='int32')
+                QA_q = np.empty((0, params.question_size), dtype='int32')
+                QA_y = np.empty((0, ), dtype='int32')
                 tot_QA_loss = []
                 tot_QA_acc = []
                 for i in range(num_batches):
@@ -215,13 +215,18 @@ class BaseModel(object):
                             break
                     r.append(mean_r)
                     tot_J.append(J)
-                    QA_batch_x = np.concatenate((QA_batch_x, batch[0]), axis=0)
-                    QA_batch_q = np.concatenate((QA_batch_q, pred_qs), axis=0)
-                    QA_batch_y = np.concatenate((QA_batch_y, expert_anses), axis=0)
+                    QA_x = np.concatenate((QA_x, batch[0]), axis=0)
+                    QA_q = np.concatenate((QA_q, pred_qs), axis=0)
+                    QA_y = np.concatenate((QA_y, expert_anses), axis=0)
                     if i % 1 == 0:
-                        QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_batch_x, QA_batch_q, QA_batch_y))
-                        tot_QA_loss.append(QA_loss)
-                        tot_QA_acc.append(acc)
+                        QA_x = QA_x[::-1]
+                        QA_q = QA_q[::-1]
+                        QA_y = QA_y[::-1]
+                        for j in range(len(QA_batch_x)//params.batch_size):
+                            QA_slice = slice(j, j+params.batch_size)
+                            QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_x[QA_slice], QA_q[QA_slice], QA_y[QA_slice]))
+                            tot_QA_loss.append(QA_loss)
+                            tot_QA_acc.append(acc)
                         """
                         QA_batch_x = np.empty((0, params.story_size, params.sentence_size), dtype='int32')
                         QA_batch_q = np.empty((0, params.question_size), dtype='int32')
