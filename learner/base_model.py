@@ -132,16 +132,30 @@ class BaseModel(object):
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
         return self.sess.run(rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses
 
+    def q2string(self, q):
+        for i in range(1, len(q)):
+            if not q[-i] == 0:
+                break
+        q_str = "".join(self.words.idx2word[token] + ' ' for token in q[:len(q)-i+1])
+        return q_str
+
+    def content2string(self, content):
+        content_str = ""
+        for sent in content:
+            if sent[0] == 0:
+                break
+            for i in range(1, len(sent)):
+                if not sent[-i] == 0:
+                    break
+            content_str = content_str + "".join(self.words.idx2word[token] + ' ' for token in sent[:len(sent)-i+1]) + '\n'
+        return content_str
+
     def pre_test_batch(self, batch):
         pre_eval_list = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
 
         pred_qs = self.get_question(feed_dict)
-        for idx, output in enumerate(pred_qs):
-            pred_q = [self.words.idx2word[token] for token in output]
-            pred_q = "".join(token+' ' for token in pred_q)
-            print("Predict_Q: "+pred_q.strip())
-            break
+        print("Predict_Q: ", self.q2string(pred_qs[0]))
 
         return self.sess.run(pre_eval_list, feed_dict=feed_dict)
 
@@ -169,13 +183,14 @@ class BaseModel(object):
         num_batches = train_data.num_batches
 
         print("Pre-Training on 100 samples")
-        batch = train_data.get_batch_cnt(256)
+        batch = train_data.get_batch_cnt(512)
         try:
-            for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
+            for epoch_no in range(num_epochs):
                 summ,  _, global_step = self.pre_train_batch(batch)
                 QA_loss, QG_loss, acc, global_step = self.pre_test_batch(batch)
                 var_summ = self.sess.run(self.merged_VAR)
-                tqdm.write("[Training] step {:d}, QA_Loss = {:.4f}, QG_Loss = {:.4f}, ACC = {:.4f}".format(global_step, QA_loss, QG_loss, acc))
+                print()
+                print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, ACC = {:.4f}".format(epoch_no, num_epochs, global_step, QA_loss, QG_loss, acc))
                 self.summary_writer.add_summary(summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 if (epoch_no + 1) % params.acc_period == 0:
@@ -195,7 +210,7 @@ class BaseModel(object):
         min_val_loss = self.sess.run(self.min_validation_loss)
         print("RL Training %d epochs ..." % num_epochs)
         try:
-            for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
+            for epoch_no in range(num_epochs):
                 r = []
                 tot_J = []
                 QA_x = np.empty((0, params.story_size, params.sentence_size), dtype='int32')
@@ -208,23 +223,19 @@ class BaseModel(object):
                     (rl_summ, _, global_step, J), r_all, pred_qs, expert_anses = self.rl_train_batch(batch)
                     mean_r = np.mean(r_all)
                     if i == 0:
-                        for idx, output in enumerate(pred_qs):
-                            pred_q = [self.words.idx2word[token] for token in output]
-                            pred_q = "".join(token+' ' for token in pred_q)
-                            print("Predict_Q: "+pred_q.strip(), 'Reward:', r_all[0])
-                            break
+                        print("Content:\n" + self.content2string(batch[0][0]))
+                        print("Predict_Q: "+ self.q2string(pred_qs[0]), 'Reward:', r_all[0])
                     r.append(mean_r)
                     tot_J.append(J)
                     QA_x = np.concatenate((QA_x, batch[0]), axis=0)
                     QA_q = np.concatenate((QA_q, pred_qs), axis=0)
                     QA_y = np.concatenate((QA_y, expert_anses), axis=0)
-                    if i % 1 == 0:
-                        QA_x = QA_x[::-1]
-                        QA_q = QA_q[::-1]
-                        QA_y = QA_y[::-1]
-                        for j in range(len(QA_batch_x)//params.batch_size):
-                            QA_slice = slice(j, j+params.batch_size)
-                            QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_x[QA_slice], QA_q[QA_slice], QA_y[QA_slice]))
+                    if len(QA_x) >= params.batch_size * 2:
+                        indx = np.arange(len(QA_x))
+                        np.random.shuffle(indx)
+                        for j in range(2):
+                            tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
+                            QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_x[tmp], QA_q[tmp], QA_y[tmp]))
                             tot_QA_loss.append(QA_loss)
                             tot_QA_acc.append(acc)
                         """
@@ -242,14 +253,9 @@ class BaseModel(object):
                 train_data.reset()
 
                 if (epoch_no + 1) % params.acc_period == 0:
-                    tqdm.write("")  # Newline for TQDM
-                    write_line = "[Training] " + \
-                                 "step {:d} ".format(global_step) + \
-                                 "J = {:.4f} ".format(np.mean(tot_J)) + \
-                                 "reward = {:.4f} ".format(np.mean(r)) + \
-                                 "QA_Loss = {:.4f} ".format(np.mean(tot_QA_loss)) + \
-                                 "QA_ACC = {:.4f}".format(np.mean(tot_QA_acc))
-                    tqdm.write(write_line)
+                    print()
+                    print("[Training {}/{} step {}] J = {:.4f} reward = {:.4f} QA_Loss = {:.4f} QA_ACC = \
+                          {:.4f}".format(epoch_no, num_epochs, global_step, np.mean(tot_J), np.mean(r), np.mean(tot_QA_loss), np.mean(tot_QA_acc)))
 
                 if (epoch_no + 1) % params.val_period == 0:
                     val_loss = np.inf
@@ -363,21 +369,17 @@ class BaseModel(object):
             outputs = self.get_question(feed_dict)
             expert_entropys, expert_anses = self.ask_expert(batch, outputs)
             for idx, output in enumerate(outputs):
-                pred_q = [self.words.idx2word[token] for token in output]
-                keyterm = self.words.find_keyterm_by_idx(*output)
-                CQ_sim = self.CQ_similarity(batch[0][idx], keyterm)
+                # keyterm = self.words.find_keyterm_by_idx(*output)
+                # CQ_sim = self.CQ_similarity(batch[0][idx], keyterm)
 
-                content = "".join(self.words.idx2word[token]+' ' for sent in batch[0][idx] for token in sent)
-                question = "".join(self.words.idx2word[token]+' ' for token in batch[1][idx])
-                ans = self.words.idx2word[batch[2][idx]]
-                pred_q = "".join(token+' ' for token in pred_q)
-                expert_entropy = expert_entropys[idx]
-                expert_ans = self.words.idx2word[expert_anses[idx]]
-                outputfile.write("Content: "+content.strip()+'\n')
-                outputfile.write("Question: "+question.strip()+'\n')
-                outputfile.write("Ans: "+ans+'\n')
-                outputfile.write("Predict_Q: "+pred_q.strip()+"\tKeyTerm: "+self.words.idx2word[keyterm]+"\tCount: "+str(CQ_sim)+'\n')
-                outputfile.write("Expert Entropy: "+str(expert_entropy)+'\t'+expert_ans+"\n\n")
+                outputfile.write("Content: "'\n')
+                outputfile.write(self.content2string(batch[0][idx]))
+                outputfile.write("Question: " + self.q2string(batch[1][idx]) + '\n')
+                outputfile.write("Expert Ans: " + self.words.idx2word[expert_anses[idx]] + '\n')
+                outputfile.write("Ans: " + self.words.idx2word[batch[2][idx]] + '\n')
+                outputfile.write("Predict_Q: " + self.q2string(output) + '\n')
+                #outputfile.write("Predict_Q: "+pred_q.strip()+"\tKeyTerm: "+self.words.idx2word[keyterm]+"\tCount: "+str(CQ_sim)+'\n')
+                outputfile.write("Expert Entropy: " + str(expert_entropys[idx]) + "\n\n")
             if not all:
                 break
         data.reset()

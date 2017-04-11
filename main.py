@@ -142,8 +142,8 @@ def main(_):
         if args.load_dir == '':
             raise Exception("Need a trained model to test!")
         main_model = MainModel(words, params, expert_params)
-        main_model.eval(test, name='Test')
         main_model.decode(test, sys.stdout, sys.stdin, all=False)
+        main_model.eval(test, name='Test')
 
     elif args.action == 'rl':
         if not args.target == 'learner':
