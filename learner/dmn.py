@@ -19,14 +19,15 @@ class DMN(BaseModel):
         Improved End-To-End version."""
     def build(self, forward_only):
         params = self.params
-        N, L, Q, F = params.batch_size, params.sentence_size, params.question_size, params.story_size
-        V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
+        L, Q, F = params.sentence_size, params.question_size, params.story_size
+        V, d, A = params.dmn_embedding_size, params.dmn_hidden_size, self.words.vocab_size
 
         # initialize self
         # placeholders
-        input = tf.placeholder('int32', shape=[N, F, L], name='x')  # [num_batch, fact_count, sentence_len]
-        question = tf.placeholder('int32', shape=[N, Q], name='q')  # [num_batch, question_len]
-        answer = tf.placeholder('int32', shape=[N], name='y')  # [num_batch] - one word answer
+        input = tf.placeholder('int32', shape=[None, F, L], name='x')  # [num_batch, fact_count, sentence_len]
+        question = tf.placeholder('int32', shape=[None, Q], name='q')  # [num_batch, question_len]
+        answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
+        self.batch_size = tf.shape(answer)[0]
         fact_counts = get_sequence_length(input)
         # input_mask = tf.placeholder('float32', shape=[N, F, L, V], name='xm')
         is_training = tf.placeholder(tf.bool)
@@ -73,7 +74,7 @@ class DMN(BaseModel):
         # Episodic Memory
         with tf.variable_scope('Episodic') as scope:
             episode = EpisodeModule(d, answer_vec, facts, is_training, params.dmn_batch_norm)
-            memory = tf.identity(answer_vec) # [N, d]
+            memory = tf.identity(answer_vec) # [N, V]
 
             for t in range(params.dmn_memory_step):
                 with tf.variable_scope('Layer%d' % t):
@@ -107,7 +108,7 @@ class DMN(BaseModel):
             proj_w = weight('proj_w', [d, A])
             proj_b = bias('proj_b', A)
             ## build decoder inputs ##
-            go_pad = tf.constant(np.ones((N, 1)), dtype=tf.int32)
+            go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
             decoder_inputs = tf.concat(axis=1, values=[go_pad, question])
             decoder_inputs = tf.nn.embedding_lookup(embedding, decoder_inputs) # [N, Q+1, V]
             decoder_inputs = tf.transpose(decoder_inputs, [1, 0, 2]) # [Q+1, N, V]
@@ -129,10 +130,10 @@ class DMN(BaseModel):
                 loop_function = _loop_fn if feed_previous_bool else None
                 reuse = None if feed_previous_bool else True
                 with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
-                    q_outputs, _ = tf.nn.seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
-                                                             initial_state=q_init_state,
-                                                             cell=q_cell,
-                                                             loop_function=loop_function)
+                    q_outputs, _ = tf.contrib.legacy_seq2seq.rnn_decoder(decoder_inputs=decoder_inputs,
+                                                                         initial_state=q_init_state,
+                                                                         cell=q_cell,
+                                                                         loop_function=loop_function)
                     return q_outputs
             q_outputs = tf.cond(feed_previous,
                                 lambda: decoder(True),
@@ -145,13 +146,13 @@ class DMN(BaseModel):
         with tf.name_scope('Loss'):
             target_list = tf.unstack(tf.transpose(question)) # Q * [N]
             # Cross-Entropy loss
-            loss = tf.nn.seq2seq.sequence_loss(q_logprobs, target_list,
-                                               [tf.constant(np.ones((N,)), dtype=tf.float32)] * Q )
+            loss = tf.contrib.legacy_seq2seq.sequence_loss(q_logprobs, target_list,
+                                               [tf.ones(tf.stack([self.batch_size,]), dtype=tf.float32)] * Q )
             total_loss = loss + params.dmn_weight_decay * tf.add_n(tf.get_collection('l2'))
 
         # Policy Gradient
-        chosen_one_hot = tf.placeholder(tf.float32, shape=[N, Q, A], name='act')
-        rewards = tf.placeholder(tf.float32, shape=[N], name='rewards')
+        chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
+        rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
 
         with tf.name_scope("PolicyGradient"):
             stack_q_probs = tf.stack(q_probs, axis=1) # Q * [N, A] -> [N, Q, A]
@@ -181,8 +182,14 @@ class DMN(BaseModel):
             self.RL_opt_op = self.RLOpt()
             self.Pre_opt_op = self.PreTrainOpt()
 
+        # merged summary ops
+        self.merged_PRE = tf.summary.merge_all(key='PRE_SUMM')
+        self.merged_QA = None
+        self.merged_RL = tf.summary.merge_all(key='RL_SUMM')
+        self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
+
     def PreTrainOpt(self):
-        with tf.name_scope("PreTrainOpt"):
+        with tf.variable_scope("PreTrainOpt") as scope:
             def learning_rate_decay_fn(lr, global_step):
                 return tf.train.exponential_decay(lr,
                                                   global_step,
@@ -200,15 +207,12 @@ class DMN(BaseModel):
                                                      clip_gradients=5.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
-            """
-            optimizer = tf.train.AdamOptimizer(self.params.learning_rate)
-            opt_op = optimizer.minimize(self.total_loss, global_step=self.global_step)
-            variable_summary([lr])
-            """
+            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+                tf.add_to_collection("PRE_SUMM", var)
         return opt_op
 
     def RLOpt(self):
-        with tf.name_scope("RLOpt"):
+        with tf.variable_scope("RLOpt") as scope:
             def learning_rate_decay_fn(lr, global_step):
                 return tf.train.exponential_decay(lr,
                                                   global_step,
@@ -226,11 +230,8 @@ class DMN(BaseModel):
                                                      clip_gradients=5.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
-            """
-            optimizer = tf.train.AdamOptimizer(self.params.learning_rate)
-            opt_op = optimizer.minimize(self.J, global_step=self.global_step)
-            variable_summary([lr])
-            """
+            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+                tf.add_to_collection("RL_SUMM", var)
         return opt_op
 
     def positional_encoding(self):
@@ -241,6 +242,14 @@ class DMN(BaseModel):
                 encoding[l, v] = (1 - float(l)/L) - (float(v)/V)*(1 - 2.0*l/L)
 
         return encoding
+
+    def def_run_list(self):
+        self.pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
+        self.QA_train_list  = None
+        self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
+        self.pre_test_list  = [self.total_loss, self.total_loss, self.total_loss, self.global_step]
+        self.QA_test_list   = None
+        self.rl_test_list   = [self.J, self.total_loss, self.total_loss, self.global_step]
 
     def get_feed_dict(self, batches, feed_previous, is_train):
         return {
@@ -258,6 +267,7 @@ class DMN(BaseModel):
         save_params_dict = {'dmn_memory_step': params.dmn_memory_step,
                             'dmn_memory_update': params.dmn_memory_update,
                             'dmn_embedding_size': params.dmn_embedding_size,
+                            'dmn_hidden_size': params.dmn_hidden_size,
                             'dmn_weight_decay': params.dmn_weight_decay,
                             'dmn_keep_prob': params.dmn_keep_prob,
                             'dmn_batch_norm': params.dmn_batch_norm,

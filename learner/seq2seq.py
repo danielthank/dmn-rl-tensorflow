@@ -22,7 +22,7 @@ class Seq2Seq(BaseModel):
     def build(self, forward_only):
         params = self.params
         L, Q, F = params.sentence_size, params.question_size, params.story_size
-        V, d, A = params.dmn_embedding_size, params.dmn_embedding_size, self.words.vocab_size
+        V, d, A = params.dmn_embedding_size, params.dmn_hidden_size, self.words.vocab_size
 
         # initialize self
         # placeholders
@@ -162,6 +162,12 @@ class Seq2Seq(BaseModel):
             self.RL_opt_op, RL_opt_sc = self.RLOpt()
             self.Pre_opt_op, Pre_opt_sc = self.PreOpt()
             self.QA_opt_op, QA_opt_sc = self.QAOpt()
+
+        # merged summary ops
+        self.merged_PRE = tf.summary.merge_all(key='PRE_SUMM')
+        self.merged_QA = tf.summary.merge_all(key='QA_SUMM')
+        self.merged_RL = tf.summary.merge_all(key='RL_SUMM')
+        self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
 
     def QA_branch(self,embedding, qa_q, qa_story, is_training):
         params = self.params
@@ -330,6 +336,15 @@ class Seq2Seq(BaseModel):
 
         return encoding
 
+    def def_run_list(self):
+        self.pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
+        self.QA_train_list  = [self.merged_QA, self.QA_opt_op, self.global_step, self.QA_total_loss, self.accuracy]
+        self.rl_train_list  = [self.merged_RL, self.global_step, self.global_step, self.J]
+        #self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
+        self.pre_test_list  = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
+        self.QA_test_list   = [self.QA_total_loss, self.accuracy, self.global_step]
+        self.rl_test_list   = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
+
     def get_feed_dict(self, batches, feed_previous, is_train):
         return {
             self.x: batches[0],
@@ -346,6 +361,7 @@ class Seq2Seq(BaseModel):
         save_params_dict = {'dmn_memory_step': params.dmn_memory_step,
                             'dmn_memory_update': params.dmn_memory_update,
                             'dmn_embedding_size': params.dmn_embedding_size,
+                            'dmn_hidden_size': params.dmn_hidden_size,
                             'dmn_weight_decay': params.dmn_weight_decay,
                             'dmn_keep_prob': params.dmn_keep_prob,
                             'dmn_batch_norm': params.dmn_batch_norm,

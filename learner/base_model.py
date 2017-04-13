@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from expert.dmn import DMN as EXPERT_DMN
 from expert.ren import REN as EXPERT_REN
+from data_helper.question_memory import QuestionMemory
 
 
 ## accessible expert model ##
@@ -50,10 +51,6 @@ class BaseModel(object):
                     self.build(forward_only=False)
                 else:
                     self.build(forward_only=True)
-                self.merged_PRE = tf.summary.merge_all(key='PRE_SUMM')
-                self.merged_QA = tf.summary.merge_all(key='QA_SUMM')
-                self.merged_RL = tf.summary.merge_all(key='RL_SUMM')
-                self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
                 self.init_op = tf.global_variables_initializer()
 
         ## init saver ##
@@ -79,13 +76,20 @@ class BaseModel(object):
         print("Loading Expert...")
         self.expert = self.load_expert(expert_params)
 
+        ## reward baseline ##
         self.baseline = 0.
+
+        ## define session run lists ##
+        self.def_run_list()
 
     def __del__(self):
         if hasattr(self, "sess"):
             self.sess.close()
 
     def build(self):
+        raise NotImplementedError()
+
+    def def_run_list(self):
         raise NotImplementedError()
 
     def get_feed_dict(self, batch, feed_previous, is_train):
@@ -110,14 +114,14 @@ class BaseModel(object):
         return tot_rewards, expert_anses
 
     def pre_train_batch(self, batch):
-        pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
+        #pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
         feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=True)
-        return self.sess.run(pre_train_list, feed_dict=feed_dict)
+        return self.sess.run(self.pre_train_list, feed_dict=feed_dict)
 
     def QA_train_batch(self, batch):
-        QA_train_list = [self.merged_QA, self.QA_opt_op, self.global_step, self.QA_total_loss, self.accuracy]
+        #QA_train_list = [self.merged_QA, self.QA_opt_op, self.global_step, self.QA_total_loss, self.accuracy]
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True)
-        return self.sess.run(QA_train_list, feed_dict=feed_dict)
+        return self.sess.run(self.QA_train_list, feed_dict=feed_dict)
 
     def rl_train_batch(self, batch):
         A = self.words.vocab_size
@@ -128,9 +132,9 @@ class BaseModel(object):
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
         #rl_train_list = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
-        rl_train_list = [self.merged_RL, self.global_step, self.global_step, self.J]
+        #rl_train_list = [self.merged_RL, self.global_step, self.global_step, self.J]
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
-        return self.sess.run(rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses
+        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses
 
     def q2string(self, q):
         for i in range(1, len(q)):
@@ -151,18 +155,18 @@ class BaseModel(object):
         return content_str
 
     def pre_test_batch(self, batch):
-        pre_eval_list = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
+        #pre_test_list = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
 
         pred_qs = self.get_question(feed_dict)
         print("Predict_Q: ", self.q2string(pred_qs[0]))
 
-        return self.sess.run(pre_eval_list, feed_dict=feed_dict)
+        return self.sess.run(self.pre_test_list, feed_dict=feed_dict)
 
     def QA_test_batch(self, batch):
-        QA_eval_list = [self.QA_total_loss, self.global_step, self.accuracy]
+        #QA_test_list = [self.QA_total_loss, self.accuracy, self.global_step]
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
-        return self.sess.run(QA_eval_list, feed_dict=feed_dict)
+        return self.sess.run(self.QA_test_list, feed_dict=feed_dict)
 
     def rl_test_batch(self, batch):
         A = self.words.vocab_size
@@ -172,9 +176,9 @@ class BaseModel(object):
         rewards, expert_anses = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
-        rl_eval_list = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
+        #rl_test_list = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
-        return self.sess.run(rl_eval_list, feed_dict=feed_dict), np.mean(rewards)
+        return self.sess.run(self.rl_test_list, feed_dict=feed_dict), np.mean(rewards)
 
     def train(self, train_data, val_data):
         params = self.params
@@ -207,15 +211,20 @@ class BaseModel(object):
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
+        memory_size = 10000
+        QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), memory_size, dtype='int32')
+        QA_q_mem = QuestionMemory((params.question_size,), memory_size, dtype='int32')
+        QA_y_mem = QuestionMemory((), memory_size, dtype='int32')
+
         min_val_loss = self.sess.run(self.min_validation_loss)
         print("RL Training %d epochs ..." % num_epochs)
         try:
             for epoch_no in range(num_epochs):
                 r = []
                 tot_J = []
-                QA_x = np.empty((0, params.story_size, params.sentence_size), dtype='int32')
-                QA_q = np.empty((0, params.question_size), dtype='int32')
-                QA_y = np.empty((0, ), dtype='int32')
+                QA_x_mem.reset()
+                QA_q_mem.reset()
+                QA_y_mem.reset()
                 tot_QA_loss = []
                 tot_QA_acc = []
                 for i in range(num_batches):
@@ -227,15 +236,15 @@ class BaseModel(object):
                         print("Predict_Q: "+ self.q2string(pred_qs[0]), 'Reward:', r_all[0])
                     r.append(mean_r)
                     tot_J.append(J)
-                    QA_x = np.concatenate((QA_x, batch[0]), axis=0)
-                    QA_q = np.concatenate((QA_q, pred_qs), axis=0)
-                    QA_y = np.concatenate((QA_y, expert_anses), axis=0)
-                    if len(QA_x) >= params.batch_size * 2:
-                        indx = np.arange(len(QA_x))
+                    QA_x_mem.append(batch[0])
+                    QA_q_mem.append(pred_qs)
+                    QA_y_mem.append(expert_anses)
+                    if len(QA_x_mem) >= params.batch_size * 2:
+                        indx = np.arange(len(QA_x_mem))
                         np.random.shuffle(indx)
                         for j in range(2):
                             tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
-                            QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_x[tmp], QA_q[tmp], QA_y[tmp]))
+                            QA_summ, _, global_step, QA_loss, acc = self.QA_train_batch((QA_x_mem[tmp], QA_q_mem[tmp], QA_y_mem[tmp]))
                             tot_QA_loss.append(QA_loss)
                             tot_QA_acc.append(acc)
                         """
