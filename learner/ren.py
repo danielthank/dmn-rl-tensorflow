@@ -6,9 +6,9 @@ from functools import partial
 from tensorflow.contrib import rnn
 
 from learner.base_model import BaseModel
-from ren_helper.activations import prelu
+from tf_helper.model_utils import get_sequence_length
+from tf_helper.nn import prelu
 from ren_helper.dynamic_memory_cell import DynamicMemoryCell
-from ren_helper.model_utils import get_sequence_length
 
 
 class REN(BaseModel):

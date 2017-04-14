@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import sys
 import json
 import tensorflow as tf
@@ -63,6 +64,10 @@ parser.add_argument('--dmn_keep_prob', default=1., type=float)
 parser.add_argument('--dmn_batch_norm', dest='dmn_batch_norm', action='store_true')
 parser.add_argument('--no_dmn_batch_norm', dest='dmn_batch_norm', action='store_false')
 parser.set_defaults(dmn_batch_norm=True)
+
+# seq2seq params
+parser.add_argument('--seq2seq_hidden_size', default=150, type=int)
+parser.add_argument('--seq2seq_weight_decay', default=0.001, type=float)
 
 # ren params
 parser.add_argument('--ren_embedding_size', default=100, type=int)

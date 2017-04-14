@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from dmn_helper.nn import weight, bias, variable_summary
+from tf_helper.nn import weight, bias, variable_summary
 from dmn_helper.attn_gru import AttnGRU
 
 
