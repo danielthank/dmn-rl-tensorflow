@@ -122,6 +122,7 @@ class Seq2Seq(BaseModel):
         # Policy Gradient
         chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
         rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
+        tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
 
         with tf.name_scope("PolicyGradient"):
             stack_q_probs = tf.stack(q_probs, axis=1) # Q * [N, A] -> [N, Q, A]
@@ -273,8 +274,8 @@ class Seq2Seq(BaseModel):
                                                   decay_steps=100,
                                                   decay_rate=0.95,
                                                   staircase=True)
-            OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss"]
+            #OPTIMIZER_SUMMARIES = ["learning_rate",
+            #                       "loss"]
             opt_op = tf.contrib.layers.optimize_loss(0.5*self.QA_total_loss + 0.5*self.QG_total_loss,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
@@ -294,8 +295,8 @@ class Seq2Seq(BaseModel):
                                                   decay_steps=5000,
                                                   decay_rate=0.95,
                                                   staircase=True)
-            OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss"]
+            #OPTIMIZER_SUMMARIES = ["learning_rate",
+            #                       "loss"]
             opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
@@ -315,8 +316,8 @@ class Seq2Seq(BaseModel):
                                                   decay_steps=5000,
                                                   decay_rate=0.95,
                                                   staircase=True)
-            OPTIMIZER_SUMMARIES = ["learning_rate",
-                                   "loss"]
+            #OPTIMIZER_SUMMARIES = ["learning_rate",
+            #                       "loss"]
             opt_op = tf.contrib.layers.optimize_loss(self.J,
                                                      self.global_step,
                                                      learning_rate=self.params.learning_rate,
@@ -339,8 +340,8 @@ class Seq2Seq(BaseModel):
     def def_run_list(self):
         self.pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
         self.QA_train_list  = [self.merged_QA, self.QA_opt_op, self.global_step, self.QA_total_loss, self.accuracy]
-        self.rl_train_list  = [self.merged_RL, self.global_step, self.global_step, self.J]
-        #self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
+        #self.rl_train_list  = [self.merged_RL, self.global_step, self.global_step, self.J]
+        self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
         self.pre_test_list  = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
         self.QA_test_list   = [self.QA_total_loss, self.accuracy, self.global_step]
         self.rl_test_list   = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
