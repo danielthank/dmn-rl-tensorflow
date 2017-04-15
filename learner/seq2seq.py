@@ -297,14 +297,13 @@ class Seq2Seq(BaseModel):
         for l in range(sentence_size):
             for v in range(embedding_size):
                 encoding[l, v] = (1 - float(l)/sentence_size) - (float(v)/embedding_size)*(1 - 2.0*l/sentence_size)
-
         return encoding
 
     def def_run_list(self):
         self.pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
         self.QA_train_list  = [self.merged_QA, self.QA_opt_op, self.global_step, self.QA_total_loss, self.accuracy]
-        self.rl_train_list  = [self.merged_RL, self.global_step, self.global_step, self.J]
-        #self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
+        # self.rl_train_list  = [self.merged_RL, self.global_step, self.global_step, self.J]
+        self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
         self.pre_test_list  = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
         self.QA_test_list   = [self.QA_total_loss, self.accuracy, self.global_step]
         self.rl_test_list   = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
