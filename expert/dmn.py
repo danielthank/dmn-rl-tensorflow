@@ -6,9 +6,9 @@ from tqdm import tqdm
 from tensorflow.contrib import rnn
 
 from expert.base_model import BaseModel
+from tf_helper.nn import weight, bias, dropout, batch_norm, variable_summary
+from tf_helper.model_utils import get_sequence_length
 from dmn_helper.episode_module import EpisodeModule
-from dmn_helper.nn import weight, bias, dropout, batch_norm, variable_summary
-from ren_helper.model_utils import get_sequence_length
 
 
 class DMN(BaseModel):

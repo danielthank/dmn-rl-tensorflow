@@ -1,13 +1,9 @@
 import sys
 import os
 import json
-from copy import deepcopy
-from collections import namedtuple
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.layers import xavier_initializer
-from tqdm import tqdm
 
 from expert.dmn import DMN as EXPERT_DMN
 from expert.ren import REN as EXPERT_REN
@@ -41,7 +37,7 @@ class BaseModel(object):
         self.graph = tf.Graph()
         self.sess = tf.Session(graph=self.graph)
         with self.graph.as_default():
-            with tf.variable_scope('Learner', initializer=xavier_initializer()):
+            with tf.variable_scope('Learner', initializer=tf.contrib.layers.xavier_initializer()):
                 print("Building Learner model...")
                 self.global_step = tf.Variable(0, name='global_step', trainable=False)
                 self.min_validation_loss = tf.Variable(np.inf, name='validation_loss', trainable=False)
@@ -144,10 +140,10 @@ class BaseModel(object):
         return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses
 
     def q2string(self, q):
-        for i in range(1, len(q)):
-            if not q[-i] == 0:
+        for i in range(0, len(q)):
+            if not q[-i-1] == 0:
                 break
-        q_str = "".join(self.words.idx2word[token] + ' ' for token in q[:len(q)-i+1])
+        q_str = "".join(self.words.idx2word[token] + ' ' for token in q[:len(q)-i])
         return q_str
 
     def content2string(self, content):
@@ -155,10 +151,10 @@ class BaseModel(object):
         for sent in content:
             if sent[0] == 0:
                 break
-            for i in range(1, len(sent)):
-                if not sent[-i] == 0:
+            for i in range(0, len(sent)):
+                if not sent[-i-1] == 0:
                     break
-            content_str = content_str + "".join(self.words.idx2word[token] + ' ' for token in sent[:len(sent)-i+1]) + '\n'
+            content_str = content_str + "".join(self.words.idx2word[token] + ' ' for token in sent[:len(sent)-i]) + '\n'
         return content_str
 
     def pre_test_batch(self, batch):
@@ -326,13 +322,8 @@ class BaseModel(object):
         avg_r = np.mean(r)
         avg_QA_loss = np.mean(tot_QA_loss)
         avg_QA_acc = np.mean(tot_QA_acc)
-        write_line = ("[%s] " % name) + \
-                     "step {:d} ".format(global_step) + \
-                     "J = {:.4f} ".format(avg_J) + \
-                     "reward = {:.4f} ".format(avg_r) + \
-                     "QA_Loss = {:.4f} ".format(avg_QA_loss) + \
-                     "QA_ACC = {:.4f}".format(avg_QA_acc)
-        tqdm.write(write_line)
+        print("[{} step {:d}] J = {:.4f} reward = {:.4f} QA_Loss = {:.4f} QA_ACC = {:.4f}"
+              .format(name, global_step, avg_J, avg_r, avg_QA_loss, avg_QA_acc))
         return avg_QA_loss
 
     def save(self):
@@ -392,7 +383,7 @@ class BaseModel(object):
         return np.array(rewards).astype('float32')
 
     def decode(self, data, outputfile, inputfile, all=True):
-        tqdm.write("Write decoded output...")
+        print("Write decoded output...")
         num_batches = data.num_batches
         for _ in range(num_batches):
             batch = data.next_batch()
@@ -414,4 +405,4 @@ class BaseModel(object):
             if not all:
                 break
         data.reset()
-        tqdm.write("Finished")
+        print("Finished")
