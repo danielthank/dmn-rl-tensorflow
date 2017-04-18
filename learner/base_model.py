@@ -117,7 +117,7 @@ class BaseModel(object):
         return tot_rewards, expert_anses
 
     def D_train_batch(self, q_batch, label_batch):
-        feed_dict = {self.question: q_batch, self.D_labels: label_batch}
+        feed_dict = {self.q: q_batch, self.D_labels: label_batch}
         self.D_train_list = [self.merged_D, self.D_opt_op, self.global_step, self.D_total_loss, self.D_accuracy]
         return self.sess.run(self.D_train_list, feed_dict=feed_dict)
 
@@ -196,7 +196,8 @@ class BaseModel(object):
         tot_D_loss = []
         tot_D_acc = []
         num = len(bad_q_mem)
-        bal_true_qs = true_q_mem[np.random.randint(len(true_qs), size=num)] # balance num true qs with num bad qs
+        tmp = np.random.randint(len(true_qs), size=num)
+        bal_true_qs = true_qs[np.random.randint(len(true_qs), size=num)] # balance num true qs with num bad qs
         train_qs = QuestionMemory((params.question_size,), 2*num, dtype='int32')
         train_qs.append(bad_q_mem.all())
         train_qs.append(bal_true_qs)
@@ -209,8 +210,8 @@ class BaseModel(object):
             tmp = indx[j * batch_size: (j+1) * batch_size]
             D_summ, _, global_step, D_loss, D_acc = self.D_train_batch(train_qs[tmp], train_labels[tmp])
             tot_D_loss.append(D_loss)
-            tot_D_acc.append(acc)
-        return D_summ, global_step, tot_D_loss, tot_D_acc
+            tot_D_acc.append(D_acc)
+        return D_summ, global_step, np.mean(tot_D_loss), np.mean(tot_D_acc)
 
     def pre_train(self, train_data, val_data):
         params = self.params
@@ -224,7 +225,7 @@ class BaseModel(object):
 
         print("Pre-Training on 100 samples")
         batch = train_data.get_batch_cnt(512)
-        true_qs = batch[1]
+        true_qs = np.array(batch[1])
         try:
             for epoch_no in range(num_epochs):
                 QA_summ,  _, global_step = self.pre_train_batch(batch)
@@ -232,13 +233,8 @@ class BaseModel(object):
                 bad_q_mem.append(pred_qs[rewards < 0.9])
                 D_summ, global_step, D_loss, D_acc = self.D_train(true_qs, bad_q_mem)
                 var_summ = self.sess.run(self.merged_VAR)
-                print("[Training epoch {}/{} step {}], \
-                       QA_Loss = {:.4f}, \
-                       QG_Loss = {:.4f}, \
-                       QA_ACC = {:.4f}".format(epoch_no, num_epochs, global_step, QA_loss, QG_loss, QA_acc))
-                print("[Discriminator], \
-                       D_Loss = {:.4f}, \
-                       ACC = {:.4f}".format(D_loss, D_acc))
+                print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, QA_ACC = {:.4f}".format(epoch_no, num_epochs, global_step, QA_loss, QG_loss, QA_acc))
+                print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
                 print()
                 self.summary_writer.add_summary(D_summ, global_step)
                 self.summary_writer.add_summary(QA_summ, global_step)
