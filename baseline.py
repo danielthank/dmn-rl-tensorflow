@@ -30,7 +30,7 @@ def run_baseline(task, args, MainModel):
         train_sub = train[:training_sample]
         ## run action ##
         main_model = MainModel(words, params)
-        main_model.train(train_sub, val)
+        main_model.pre_train(train_sub, val)
         #main_model.save_params()
 
         main_model.eval(test, name='Test')

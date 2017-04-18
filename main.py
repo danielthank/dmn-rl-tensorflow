@@ -164,7 +164,7 @@ def main(_):
         ## run action ##
         if args.action == 'train':
             main_model = MainModel(words, params, expert_params)
-            main_model.train(train, val)
+            main_model.pre_train(train, val)
             main_model.save_params()
 
         elif args.action == 'test':

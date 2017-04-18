@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import rnn
 from tensorflow.contrib.rnn import static_bidirectional_rnn
+from tensorflow.contrib.layers import fully_connected, variance_scaling_initializer
 
 from learner.base_model import BaseModel
 from tf_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
@@ -33,12 +34,18 @@ class Seq2Seq(BaseModel):
         is_training = tf.placeholder(tf.bool)
         feed_previous = tf.placeholder(tf.bool)
 
+        D_labels = tf.placeholder('bool', shape=[None], name='D_labels')
+
         # Prepare parameters
-        gru = rnn.GRUCell(V)
+        #gru = rnn.GRUCell(V)
+        gru = rnn.LSTMCell(V)
         story_positional_encoding = self.positional_encoding(L, V)
         question_positional_encoding = self.positional_encoding(Q, V)
-
         embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
+
+        D_embedding = tf.get_variable('D_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+        D_embedding = D_embedding * embedding_mask
+
         qa_embedding = tf.get_variable('qa_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
         qa_embedding = qa_embedding * embedding_mask
         # variable_summary([qa_embedding])
@@ -84,10 +91,29 @@ class Seq2Seq(BaseModel):
             #qg_q = question_positional_encoding * qg_q
             #qg_q = tf.reduce_sum(qg_q, 1) # [N, V]
         
+        ## Discriminator
+        with tf.variable_scope("Discriminator") as scope:
+            D_logits = self.Discriminator(D_embedding, question)
+            D_probs = tf.sigmoid(D_logits)
+            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            variable_summary(variables)
+            # cross entropy loss
+            re_D_labels = tf.cast(tf.reshape(D_labels, shape=[-1, 1]), tf.float32)
+            D_cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logits, labels=re_D_labels)
+            D_loss = tf.reduce_mean(D_cross_entropy)
+            D_total_loss = D_loss
+            # accuracy
+            D_predicts = tf.greater_equal(D_probs, 0.5)
+            D_corrects = tf.equal(D_predicts, D_labels)
+            D_accuracy = tf.reduce_mean(tf.cast(D_corrects, tf.float32))
+
+
         ## QA Branch
-        with tf.name_scope('QA_branch'):
+        with tf.variable_scope('QA_branch') as scope:
             QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story, is_training)
             QA_ans = tf.nn.softmax(QA_ans_logits)
+            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            variable_summary(variables)
 
             with tf.name_scope('QA_Loss'):
                 # Cross-Entropy loss
@@ -140,6 +166,8 @@ class Seq2Seq(BaseModel):
         self.is_training = is_training
         self.feed_previous = feed_previous
 
+        self.D_labels = D_labels
+
         # policy gradient placeholders
         self.chosen_one_hot = chosen_one_hot
         self.rewards = rewards
@@ -154,6 +182,11 @@ class Seq2Seq(BaseModel):
         self.q_probs = q_probs
         self.QG_total_loss = QG_total_loss
 
+        # Dirsciminator output tensors
+        self.D_probs = D_probs
+        self.D_total_loss = D_total_loss
+        self.D_accuracy = D_accuracy
+
         # policy gradient output tensors
         self.J = J
 
@@ -162,23 +195,52 @@ class Seq2Seq(BaseModel):
             self.RL_opt_op, RL_opt_sc = self.RLOpt()
             self.Pre_opt_op, Pre_opt_sc = self.PreOpt()
             self.QA_opt_op, QA_opt_sc = self.QAOpt()
+            self.D_opt_op, D_opt_sc = self.DOpt()
 
         # merged summary ops
+        self.merged_D = tf.summary.merge_all(key='D_SUMM')
         self.merged_PRE = tf.summary.merge_all(key='PRE_SUMM')
         self.merged_QA = tf.summary.merge_all(key='QA_SUMM')
         self.merged_RL = tf.summary.merge_all(key='RL_SUMM')
         self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
 
-    def QA_branch(self,embedding, qa_q, qa_story, is_training):
+    def Discriminator(self, D_embedding, question):
+        params = self.params 
+        Q = params.question_size
+        V = params.seq2seq_hidden_size
+        with tf.name_scope('D_QuestionReader'):
+            D_q = tf.nn.embedding_lookup(D_embedding, question) # [N, Q, V]
+            D_q = tf.reshape(D_q, shape=[-1, Q*V]) # [N, Q, V] -> [N, Q*V]
+
+        with tf.variable_scope("fc_layers"):
+            weight_initializer = variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=False)
+            bias_initializer = variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True)
+            stack_args = [[512, tf.nn.relu],
+                          [512, tf.nn.relu],
+                          [512, tf.nn.relu],
+                          [512, tf.nn.relu],
+                          [1, None]]
+            D_logits = tf.contrib.layers.stack(D_q,
+                                               fully_connected,
+                                               stack_args,
+                                               weights_initializer=weight_initializer,
+                                               biases_initializer=bias_initializer,
+                                               scope="fc_layers")
+        return D_logits
+            
+
+
+    def QA_branch(self, embedding, qa_q, qa_story, is_training):
         params = self.params
         # attention mechanism
-        q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
+        #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
+        q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
         go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
         go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         decoder_inputs = tf.unstack(go_pad, axis=1) # 1 * [N, V]
 
         q_logprobs, _ = tf.contrib.legacy_seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
-                                                                    initial_state=qa_q,
+                                                                    initial_state=(qa_q, qa_q),
                                                                     attention_states=qa_story,
                                                                     cell=q_cell,
                                                                     output_size=self.words.vocab_size,
@@ -201,7 +263,8 @@ class Seq2Seq(BaseModel):
         decoder_inputs = tf.unstack(decoder_inputs, axis=1)[:-1] # Q * [N, V]
 
         ## question module rnn cell ##
-        q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
+        #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
+        q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
 
         ## decoder loop function ##
         def _loop_fn(prev, i):
@@ -215,7 +278,7 @@ class Seq2Seq(BaseModel):
             reuse = None if feed_previous_bool else True
             with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
                 q_logprobs, _ = tf.contrib.legacy_seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
-                                                                            initial_state=qg_story[:, -1],
+                                                                            initial_state=(qg_story[:, -1], qg_story[:, -1]),
                                                                             attention_states=qg_story,
                                                                             cell=q_cell,
                                                                             output_size=self.words.vocab_size,
@@ -229,6 +292,26 @@ class Seq2Seq(BaseModel):
         # q_logprobs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
         # return q_outputs
 
+    def DOpt(self):
+        with tf.variable_scope("DOpt") as scope:
+            def learning_rate_decay_fn(lr, global_step):
+                return tf.train.exponential_decay(lr,
+                                                  global_step,
+                                                  decay_steps=5000,
+                                                  decay_rate=0.95,
+                                                  staircase=True)
+            #OPTIMIZER_SUMMARIES = ["learning_rate",
+            #                       "loss"]
+            opt_op = tf.contrib.layers.optimize_loss(self.D_total_loss,
+                                                     self.global_step,
+                                                     learning_rate=self.params.learning_rate,
+                                                     optimizer=tf.train.AdamOptimizer,
+                                                     clip_gradients=5.,
+                                                     learning_rate_decay_fn=learning_rate_decay_fn,
+                                                     summaries=OPTIMIZER_SUMMARIES)
+            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+                tf.add_to_collection("D_SUMM", var)
+            return opt_op, scope.name
 
     def PreOpt(self):
         with tf.variable_scope("PreOpt") as scope:
