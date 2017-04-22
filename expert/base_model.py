@@ -92,9 +92,14 @@ class BaseModel(object):
     def output_by_question(self, batch, pred_qs):
         feed_dict = self.get_feed_dict(batch, is_train=False)
         feed_dict[self.q] = pred_qs
+        """
         output_probs = self.sess.run(self.output, feed_dict=feed_dict)
         assert output_probs.shape == (pred_qs.shape[0], self.words.vocab_size)
         return output_probs
+        """
+        ans_logits = self.sess.run(self.ans_logits, feed_dict=feed_dict)
+        assert ans_logits.shape == (pred_qs.shape[0], self.words.vocab_size)
+        return ans_logits
 
     def train(self, train_data, val_data):
         assert self.action == 'train'

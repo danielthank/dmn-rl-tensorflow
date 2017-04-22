@@ -173,6 +173,7 @@ class Seq2Seq(BaseModel):
         self.rewards = rewards
 
         # QA output tensors
+        self.QA_ans_logits = QA_ans_logits
         self.QA_ans = QA_ans
         self.QA_total_loss = QA_total_loss
         self.num_corrects = num_corrects
@@ -235,6 +236,7 @@ class Seq2Seq(BaseModel):
         # attention mechanism
         #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
+        #q_cell = tf.contrib.rnn.MultiRNNCell([q_cell for l in range(num_layers)])
         go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
         go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         decoder_inputs = tf.unstack(go_pad, axis=1) # 1 * [N, V]
@@ -265,6 +267,7 @@ class Seq2Seq(BaseModel):
         ## question module rnn cell ##
         #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
+        #q_cell = tf.contrib.rnn.MultiRNNCell([q_cell for l in range(num_layers)])
 
         ## decoder loop function ##
         def _loop_fn(prev, i):
@@ -282,8 +285,7 @@ class Seq2Seq(BaseModel):
                                                                             attention_states=qg_story,
                                                                             cell=q_cell,
                                                                             output_size=self.words.vocab_size,
-                                                                            loop_function=loop_function
-                                                                            )
+                                                                            loop_function=loop_function)
                 return q_logprobs
 
         return tf.cond(feed_previous,
