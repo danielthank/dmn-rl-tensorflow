@@ -149,6 +149,7 @@ class REN(BaseModel):
         self.feed_previous = feed_previous
             #Tensors
         self.total_loss = total_loss
+        self.q_logprobs = q_logprobs
         self.output = q_probs
 
             # Output Module

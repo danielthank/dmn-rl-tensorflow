@@ -144,9 +144,10 @@ def main(_):
                 raise Exception("incompatible main model with load model!")
             params = params._replace(**load_params)
         else:
-            if tf.gfile.Exists(save_dir):
-                tf.gfile.DeleteRecursively(save_dir)
-            os.makedirs(save_dir, exist_ok=True)
+            if not args.action == "test":
+                if tf.gfile.Exists(save_dir):
+                    tf.gfile.DeleteRecursively(save_dir)
+                os.makedirs(save_dir, exist_ok=True)
 
         if not params.expert_dir == '':
             params_filename = os.path.join(params.expert_dir, 'params.json')
@@ -164,7 +165,7 @@ def main(_):
         ## run action ##
         if args.action == 'train':
             main_model = MainModel(words, params, expert_params)
-            main_model.train(train, val)
+            main_model.pre_train(train, val)
             main_model.save_params()
 
         elif args.action == 'test':

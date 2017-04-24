@@ -62,16 +62,16 @@ class REN(BaseModel):
                 initial_state=initial_state)
 
             logits = self.get_output(last_state, encoded_question,
-                num_blocks=num_blocks,
-                vocab_size=vocab_size,
-                initializer=normal_initializer,
-                activation=activation)
+                                     num_blocks=num_blocks,
+                                     vocab_size=vocab_size,
+                                     initializer=normal_initializer,
+                                     activation=activation)
 
             logits = tf.contrib.layers.batch_norm(logits, decay=0.9, is_training=is_training, center=True, scale=True,
                                                   updates_collections=None, scope='BatchNorm')
 
-            # self.output = tf.nn.softmax(logits)
-            self.output = logits
+            self.ans_logits = logits
+            self.output = tf.nn.softmax(logits)
             predicts = tf.argmax(logits, 1)
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=answer)
             self.total_loss = tf.reduce_mean(cross_entropy)

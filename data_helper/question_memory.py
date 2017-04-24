@@ -1,4 +1,5 @@
 from collections import deque
+import warnings
 import numpy as np
 
 class QuestionMemory():
@@ -11,6 +12,9 @@ class QuestionMemory():
     def append(self, questions):
         questions = np.array(questions)
         num = questions.shape[0]
+        if num == 0:
+            warnings.warn("Appending an empty array!", UserWarning)
+            return
         if not self.full and self.idx+num >= self.max_len:
             self.full = True
         if num > self.max_len:

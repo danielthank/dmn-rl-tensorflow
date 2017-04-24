@@ -10,6 +10,27 @@ from expert.ren import REN as EXPERT_REN
 from data_helper.question_memory import QuestionMemory
 
 
+def sigmoid(x):
+    return 1 / (1 + np.exp(-0.3*x))
+
+def get_rep_rewards(qs, V):
+    batch_size  = qs.shape[0]
+    q_size      = qs.shape[1]
+    tot_reps    = np.zeros(batch_size)
+    real_size   = np.zeros(batch_size, dtype='int32')
+    for b in range(batch_size):
+        if_reps = [False]*V
+        start = False
+        for i in range(q_size-1, -1, -1):
+            if not qs[b, i] == 0 and start == False:
+                real_size[b] = i + 1
+                start = True
+            if start:
+                if if_reps[qs[b, i]] == True:
+                    tot_reps[b] += 1. / real_size[b]
+                if_reps[qs[b, i]] = True
+    return tot_reps
+
 ## accessible expert model ##
 EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
                 'expert_ren': EXPERT_REN}
@@ -109,13 +130,25 @@ class BaseModel(object):
     def get_rewards(self, batch, pred_qs):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
         learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
-        CQ_rewards = self.CQ_reward(batch[0], pred_qs)
+        """
+        repeats = (pred_qs[:, :pred_qs.shape[1]-1] == pred_qs[:, 1:pred_qs.shape[1]])
+        rep_rewards = -1.0 * np.sum(repeats, axis=1) / pred_qs.shape[1]
+        """
+        rep_rewards = get_rep_rewards(pred_qs, self.words.vocab_size).astype('float32')
+        exist_rewards = np.any(np.equal(np.array(batch[0]), expert_anses[:, None, None]), axis=(1, 2))
+        #CQ_rewards = self.CQ_reward(batch[0], pred_qs)
+
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
-        # tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
+        #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         #tot_rewards = np.exp(expert_entropys)
+        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 10. * exist_rewards
         #tot_rewards = np.random.rand(*tot_rewards.shape)
-        tot_rewards = expert_entropys - learner_entropys
-        return tot_rewards, expert_anses
+        return tot_rewards, expert_anses, rep_rewards
+
+    def D_train_batch(self, q_batch, label_batch):
+        feed_dict = {self.q: q_batch, self.D_labels: label_batch}
+        self.D_train_list = [self.merged_D, self.D_opt_op, self.global_step, self.D_total_loss, self.D_accuracy]
+        return self.sess.run(self.D_train_list, feed_dict=feed_dict)
 
     def pre_train_batch(self, batch):
         #pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
@@ -132,13 +165,13 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True)
         pred_qs = self.get_question(feed_dict)
 
-        rewards, expert_anses = self.get_rewards(batch, pred_qs)
+        rewards, expert_anses, rep = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
         #rl_train_list = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
         #rl_train_list = [self.merged_RL, self.global_step, self.global_step, self.J]
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
-        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses
+        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses, rep
 
     def q2string(self, q):
         for i in range(0, len(q)):
@@ -163,9 +196,10 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
 
         pred_qs = self.get_question(feed_dict)
-        print("Predict_Q: ", self.q2string(pred_qs[0]))
+        rewards, expert_anses, rep = self.get_rewards(batch, pred_qs)
+        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'Rep:', rep[0])
 
-        return self.sess.run(self.pre_test_list, feed_dict=feed_dict)
+        return self.sess.run(self.pre_test_list, feed_dict=feed_dict), pred_qs, rewards
 
     def QA_test_batch(self, batch):
         #QA_test_list = [self.QA_total_loss, self.accuracy, self.global_step]
@@ -177,29 +211,62 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
         pred_qs = self.get_question(feed_dict)
 
-        rewards, expert_anses = self.get_rewards(batch, pred_qs)
+        rewards, expert_anses, _ = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
         #rl_test_list = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
         return self.sess.run(self.rl_test_list, feed_dict=feed_dict), np.mean(rewards)
 
-    def train(self, train_data, val_data):
+    def D_train(self, true_qs, bad_q_mem):
+        params = self.params
+        batch_size = params.batch_size
+
+        tot_D_loss = []
+        tot_D_acc = []
+        num = len(bad_q_mem)
+        tmp = np.random.randint(len(true_qs), size=num)
+        bal_true_qs = true_qs[np.random.randint(len(true_qs), size=num)] # balance num true qs with num bad qs
+        train_qs = QuestionMemory((params.question_size,), 2*num, dtype='int32')
+        train_qs.append(bad_q_mem.all())
+        train_qs.append(bal_true_qs)
+        train_labels = QuestionMemory((), 2*num, dtype='bool')
+        train_labels.append([False]*num)
+        train_labels.append([True]*num)
+        indx = np.arange(2*num)
+        np.random.shuffle(indx)
+        for j in range(2*num//batch_size):
+            tmp = indx[j * batch_size: (j+1) * batch_size]
+            D_summ, _, global_step, D_loss, D_acc = self.D_train_batch(train_qs[tmp], train_labels[tmp])
+            tot_D_loss.append(D_loss)
+            tot_D_acc.append(D_acc)
+        return D_summ, global_step, np.mean(tot_D_loss), np.mean(tot_D_acc)
+
+    def pre_train(self, train_data, val_data):
         params = self.params
         assert not self.action == 'test'
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
 
+        ## discriminator question buffer
+        bad_q_mem = QuestionMemory((params.question_size,), int(1e6), dtype='int32')
+        true_qs = None
+
         print("Pre-Training on 100 samples")
         batch = train_data.get_batch_cnt(512)
+        true_qs = np.array(batch[1])
         try:
             for epoch_no in range(num_epochs):
-                summ,  _, global_step = self.pre_train_batch(batch)
-                QA_loss, QG_loss, acc, global_step = self.pre_test_batch(batch)
+                QA_summ,  _, global_step = self.pre_train_batch(batch)
+                (QA_loss, QG_loss, QA_acc, global_step), pred_qs, rewards = self.pre_test_batch(batch)
+                #bad_q_mem.append(pred_qs[rewards < 0.9])
+                #D_summ, global_step, D_loss, D_acc = self.D_train(true_qs, bad_q_mem)
                 var_summ = self.sess.run(self.merged_VAR)
-                print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, ACC = {:.4f}".format(epoch_no, num_epochs, global_step, QA_loss, QG_loss, acc))
+                print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, QA_ACC = {:.4f}".format(epoch_no, num_epochs, global_step, QA_loss, QG_loss, QA_acc))
+                #print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
                 print()
-                self.summary_writer.add_summary(summ, global_step)
+                #self.summary_writer.add_summary(D_summ, global_step)
+                self.summary_writer.add_summary(QA_summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 if (epoch_no + 1) % params.acc_period == 0:
                     if val_data:
@@ -250,15 +317,16 @@ class BaseModel(object):
                 tot_QA_acc = [0.]
                 for i in range(num_batches):
                     batch = train_data.next_batch()
-                    (rl_summ, _, global_step, J), r_all, pred_qs, expert_anses = self.rl_train_batch(batch)
+                    (rl_summ, _, global_step, J), r_all, pred_qs, expert_anses, rep = self.rl_train_batch(batch)
                     mean_r = np.mean(r_all)
                     if i == 0:
                         text = "Content:\n" + self.content2string(batch[0][0])
-                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0])
+                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Rep: '+str(rep[0])
                         print(text)
                         print()
                     r.append(mean_r)
                     tot_J.append(J)
+                    """
                     QA_x_mem.append(batch[0])
                     QA_q_mem.append(pred_qs)
                     QA_y_mem.append(expert_anses)
@@ -269,12 +337,14 @@ class BaseModel(object):
                                                                            num_batch=2)
                         tot_QA_loss += QA_loss
                         tot_QA_acc += acc
-
+                    """
                 self.baseline = 0.9*self.baseline + 0.1*np.mean(r) if not self.baseline == 0. else np.mean(r)
 
                 var_summ = self.sess.run(self.merged_VAR)
+                """
                 if not self.merged_QA == None:
                     self.summary_writer.add_summary(QA_summ, global_step)
+                """
                 self.summary_writer.add_summary(rl_summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 train_data.reset()
@@ -348,19 +418,31 @@ class BaseModel(object):
     def ask_learner(self, batch, pred_qs):
         feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=False)
         feed_dict[self.q] = pred_qs
+        """
         ans_probs = self.sess.run(self.QA_ans, feed_dict=feed_dict)
-        assert ans_probs.shape == (self.params.batch_size, self.words.vocab_size)
+        #assert ans_probs.shape == (self.params.batch_size, self.words.vocab_size)
         max_index = np.argmax(ans_probs, axis=1)
         #inverse_entropy = np.sum(np.log(ans_probs + 1e-20) * ans_probs, axis=1)
         inverse_entropy = np.max(ans_probs, axis=1)
         return inverse_entropy, max_index
+        """
+        ans_logits = self.sess.run(self.QA_ans_logits, feed_dict=feed_dict)
+        max_index = np.argmax(ans_logits, axis=1)
+        max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        return max_logits_norm, max_index
 
     def ask_expert(self, batch, pred_qs):
+        """
         output_probs = self.expert.output_by_question(batch, pred_qs)
         max_index = np.argmax(output_probs, axis=1)
         #inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
         inverse_entropy = np.max(output_probs, axis=1)
         return inverse_entropy, max_index
+        """
+        ans_logits = self.expert.output_by_question(batch, pred_qs)
+        max_index = np.argmax(ans_logits, axis=1)
+        max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        return max_logits_norm, max_index
 
     def CQ_similarity(self, content, keyterm):
         ## keyterm should be a word idx
