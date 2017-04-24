@@ -11,7 +11,25 @@ from data_helper.question_memory import QuestionMemory
 
 
 def sigmoid(x):
-    return 1 / (1 + np.exp(-(x - 11.)))
+    return 1 / (1 + np.exp(-0.3*x))
+
+def get_rep_rewards(qs, V):
+    batch_size  = qs.shape[0]
+    q_size      = qs.shape[1]
+    tot_reps    = np.zeros(batch_size)
+    real_size   = np.zeros(batch_size, dtype='int32')
+    for b in range(batch_size):
+        if_reps = [False]*V
+        start = False
+        for i in range(q_size-1, -1, -1):
+            if not qs[b, i] == 0 and start == False:
+                real_size[b] = i + 1
+                start = True
+            if start:
+                if if_reps[qs[b, i]] == True:
+                    tot_reps[b] += 1. / real_size[b]
+                if_reps[qs[b, i]] = True
+    return tot_reps
 
 ## accessible expert model ##
 EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
@@ -110,19 +128,20 @@ class BaseModel(object):
         return q_idxes
 
     def get_rewards(self, batch, pred_qs):
+        expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
+        learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         """
         repeats = (pred_qs[:, :pred_qs.shape[1]-1] == pred_qs[:, 1:pred_qs.shape[1]])
         rep_rewards = -1.0 * np.sum(repeats, axis=1) / pred_qs.shape[1]
         """
-        rep_rewards = -4.0 * np.array([len(l) - len(set(l)) for l in pred_qs]).astype('float32') / pred_qs.shape[1]
-
-        expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
-        learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
+        rep_rewards = get_rep_rewards(pred_qs, self.words.vocab_size).astype('float32')
+        exist_rewards = np.any(np.equal(np.array(batch[0]), expert_anses[:, None, None]), axis=(1, 2))
         #CQ_rewards = self.CQ_reward(batch[0], pred_qs)
+
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         #tot_rewards = np.exp(expert_entropys)
-        tot_rewards = sigmoid(expert_entropys) + rep_rewards
+        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 10. * exist_rewards
         #tot_rewards = np.random.rand(*tot_rewards.shape)
         return tot_rewards, expert_anses, rep_rewards
 
@@ -307,6 +326,7 @@ class BaseModel(object):
                         print()
                     r.append(mean_r)
                     tot_J.append(J)
+                    """
                     QA_x_mem.append(batch[0])
                     QA_q_mem.append(pred_qs)
                     QA_y_mem.append(expert_anses)
@@ -317,12 +337,14 @@ class BaseModel(object):
                                                                            num_batch=2)
                         tot_QA_loss += QA_loss
                         tot_QA_acc += acc
-
+                    """
                 self.baseline = 0.9*self.baseline + 0.1*np.mean(r) if not self.baseline == 0. else np.mean(r)
 
                 var_summ = self.sess.run(self.merged_VAR)
+                """
                 if not self.merged_QA == None:
                     self.summary_writer.add_summary(QA_summ, global_step)
+                """
                 self.summary_writer.add_summary(rl_summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 train_data.reset()
@@ -405,8 +427,8 @@ class BaseModel(object):
         """
         ans_logits = self.sess.run(self.QA_ans_logits, feed_dict=feed_dict)
         max_index = np.argmax(ans_logits, axis=1)
-        max_logits = np.max(ans_logits, axis=1)
-        return max_logits, max_index
+        max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        return max_logits_norm, max_index
 
     def ask_expert(self, batch, pred_qs):
         """
@@ -417,8 +439,8 @@ class BaseModel(object):
         """
         ans_logits = self.expert.output_by_question(batch, pred_qs)
         max_index = np.argmax(ans_logits, axis=1)
-        max_logits = np.max(ans_logits, axis=1)
-        return max_logits, max_index
+        max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        return max_logits_norm, max_index
 
     def CQ_similarity(self, content, keyterm):
         ## keyterm should be a word idx

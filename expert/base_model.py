@@ -250,7 +250,8 @@ class BaseModel(object):
                 print(i+1, self._get_good_output(sent), file=outputfile)
             print("Question:", self._get_good_output(batch[1][0]), file=outputfile)
             feed_dict = self.get_feed_dict((story, question, answer), is_train=False)
-            outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            #outputs = self.sess.run(self.output, feed_dict=feed_dict)
+            outputs = self.sess.run(self.ans_logits, feed_dict=feed_dict)
             p_ans = self.words.idx2word[np.argmax(outputs[0])]
             order = np.argsort(outputs[0])[::-1]
             print("Predict_A:", file=outputfile)
