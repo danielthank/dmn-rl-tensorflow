@@ -308,11 +308,11 @@ class BaseModel(object):
             for epoch_no in range(num_epochs):
                 r = []
                 tot_J = []
-                """
+
                 QA_x_mem.reset()
                 QA_q_mem.reset()
                 QA_y_mem.reset()
-                """
+
                 tot_QA_loss = [0.]
                 tot_QA_acc = [0.]
                 for i in range(num_batches):
@@ -326,7 +326,7 @@ class BaseModel(object):
                         print()
                     r.append(mean_r)
                     tot_J.append(J)
-                    """
+
                     QA_x_mem.append(batch[0])
                     QA_q_mem.append(pred_qs)
                     QA_y_mem.append(expert_anses)
@@ -337,14 +337,14 @@ class BaseModel(object):
                                                                            num_batch=2)
                         tot_QA_loss += QA_loss
                         tot_QA_acc += acc
-                    """
+
                 self.baseline = 0.9*self.baseline + 0.1*np.mean(r) if not self.baseline == 0. else np.mean(r)
 
                 var_summ = self.sess.run(self.merged_VAR)
-                """
+
                 if not self.merged_QA == None:
                     self.summary_writer.add_summary(QA_summ, global_step)
-                """
+
                 self.summary_writer.add_summary(rl_summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 train_data.reset()

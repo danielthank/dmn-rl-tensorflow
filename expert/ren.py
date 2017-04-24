@@ -6,7 +6,7 @@ import tensorflow as tf
 from functools import partial
 
 from expert.base_model import BaseModel
-from tf_helper.nn import prelu, batch_norm
+from tf_helper.nn import prelu
 from tf_helper.model_utils import get_sequence_length
 from ren_helper.dynamic_memory_cell import DynamicMemoryCell
 

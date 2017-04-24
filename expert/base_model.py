@@ -101,7 +101,7 @@ class BaseModel(object):
         assert ans_logits.shape == (pred_qs.shape[0], self.words.vocab_size)
         return ans_logits
 
-    def train(self, train_data, val_data):
+    def pre_train(self, train_data, val_data):
         assert self.action == 'train'
         params = self.params
         num_epochs = params.num_epochs

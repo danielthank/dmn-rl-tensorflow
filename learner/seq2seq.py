@@ -31,7 +31,7 @@ class Seq2Seq(BaseModel):
         answer = tf.placeholder('int32', shape=[None], name='y')
         self.batch_size = tf.shape(answer)[0]
         fact_counts = get_sequence_length(input)
-        is_training = tf.placeholder(tf.bool)
+        self.is_training = tf.placeholder(tf.bool)
         feed_previous = tf.placeholder(tf.bool)
 
         D_labels = tf.placeholder('bool', shape=[None], name='D_labels')
@@ -58,7 +58,7 @@ class Seq2Seq(BaseModel):
             # apply positional encoding
             qa_story = story_positional_encoding * qa_story
             qa_story = tf.reduce_sum(qa_story, 2)  # [batch, story, embedding_size]
-            qa_story = dropout(qa_story, 0.5, is_training)
+            qa_story = dropout(qa_story, 0.5, self.is_training)
             (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(gru,
                                                                                    gru,
                                                                                    qa_story,
@@ -71,7 +71,7 @@ class Seq2Seq(BaseModel):
             # apply positional encoding
             qg_story = story_positional_encoding * qg_story
             qg_story = tf.reduce_sum(qg_story, 2)  # [batch, story, embedding_size]
-            qg_story = dropout(qg_story, 0.5, is_training)
+            qg_story = dropout(qg_story, 0.5, self.is_training)
             (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(gru,
                                                                                    gru,
                                                                                    qg_story,
@@ -83,11 +83,11 @@ class Seq2Seq(BaseModel):
             qa_q = tf.nn.embedding_lookup(qa_embedding, question) # [N, Q, V]
             qa_q = question_positional_encoding * qa_q
             qa_q = tf.reduce_sum(qa_q, 1) # [N, V]
-            qa_q = dropout(qa_q, 0.5, is_training)
+            qa_q = dropout(qa_q, 0.5, self.is_training)
 
         with tf.name_scope('QG_QuestionReader'):
             qg_q = tf.nn.embedding_lookup(qg_embedding, question) # [N, Q, V]
-            qg_q = dropout(qg_q, 0.5, is_training)
+            qg_q = dropout(qg_q, 0.5, self.is_training)
             #qg_q = question_positional_encoding * qg_q
             #qg_q = tf.reduce_sum(qg_q, 1) # [N, V]
         
@@ -110,7 +110,7 @@ class Seq2Seq(BaseModel):
 
         ## QA Branch
         with tf.variable_scope('QA_branch') as scope:
-            QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story, is_training)
+            QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story)
             QA_ans = tf.nn.softmax(QA_ans_logits)
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
@@ -132,14 +132,14 @@ class Seq2Seq(BaseModel):
         ## QG Branch
         with tf.variable_scope('QG_branch') as scope:
             q_logprobs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous)
-            q_probs = [tf.nn.softmax(out) for out in q_logprobs]
+            q_probs = tf.nn.softmax(q_logprobs, dim=-1)
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
 
             with tf.name_scope('QG_Loss'):
                 target_list = tf.unstack(tf.transpose(question)) # Q * [N]
                 # Cross-Entropy loss
-                QG_loss = tf.contrib.legacy_seq2seq.sequence_loss(q_logprobs, target_list,
+                QG_loss = tf.contrib.legacy_seq2seq.sequence_loss(tf.unstack(q_logprobs), target_list,
                                                    [tf.ones(shape=tf.stack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
                 #QG_total_loss = QG_loss + params.seq2seq_weight_decay * tf.add_n(tf.get_collection('l2'))
                 QG_total_loss = QG_loss
@@ -150,7 +150,7 @@ class Seq2Seq(BaseModel):
         tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
 
         with tf.name_scope("PolicyGradient"):
-            stack_q_probs = tf.stack(q_probs, axis=1) # Q * [N, A] -> [N, Q, A]
+            stack_q_probs = tf.transpose(q_probs, perm=[1, 0, 2]) # [Q , N, A] -> [N, Q, A]
             act_probs = stack_q_probs * chosen_one_hot # [N, Q, A]
             act_probs = tf.reduce_prod(tf.reduce_sum(act_probs, axis=2), axis=1) # [N, Q, A] -> [N, Q] -> [N]
 
@@ -163,7 +163,6 @@ class Seq2Seq(BaseModel):
         self.q = question
         self.y = answer
         self.fc = fact_counts
-        self.is_training = is_training
         self.feed_previous = feed_previous
 
         self.D_labels = D_labels
@@ -231,7 +230,7 @@ class Seq2Seq(BaseModel):
             
 
 
-    def QA_branch(self, embedding, qa_q, qa_story, is_training):
+    def QA_branch(self, embedding, qa_q, qa_story):
         params = self.params
         # attention mechanism
         #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
@@ -286,6 +285,8 @@ class Seq2Seq(BaseModel):
                                                                             cell=q_cell,
                                                                             output_size=self.words.vocab_size,
                                                                             loop_function=loop_function)
+                q_logprobs = tf.contrib.layers.batch_norm(q_logprobs, decay=0.9, is_training=self.is_training, center=True, scale=True,
+                                                          updates_collections=None, scope='BatchNorm')
                 return q_logprobs
 
         return tf.cond(feed_previous,
