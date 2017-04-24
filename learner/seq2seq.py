@@ -87,7 +87,8 @@ class Seq2Seq(BaseModel):
         ## QA Branch
         with tf.name_scope('QA_branch'):
             QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story, is_training)
-            QA_ans = tf.nn.softmax(QA_ans_logits)
+            #QA_ans = tf.nn.softmax(QA_ans_logits)
+            QA_ans = QA_ans_logits
 
             with tf.name_scope('QA_Loss'):
                 # Cross-Entropy loss

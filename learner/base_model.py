@@ -112,8 +112,9 @@ class BaseModel(object):
         CQ_rewards = self.CQ_reward(batch[0], pred_qs)
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         # tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
-        tot_rewards = np.exp(expert_entropys)
+        #tot_rewards = np.exp(expert_entropys)
         #tot_rewards = np.random.rand(*tot_rewards.shape)
+        tot_rewards = expert_entropys - learner_entropys
         return tot_rewards, expert_anses
 
     def pre_train_batch(self, batch):
@@ -350,13 +351,15 @@ class BaseModel(object):
         ans_probs = self.sess.run(self.QA_ans, feed_dict=feed_dict)
         assert ans_probs.shape == (self.params.batch_size, self.words.vocab_size)
         max_index = np.argmax(ans_probs, axis=1)
-        inverse_entropy = np.sum(np.log(ans_probs + 1e-20) * ans_probs, axis=1)
+        #inverse_entropy = np.sum(np.log(ans_probs + 1e-20) * ans_probs, axis=1)
+        inverse_entropy = np.max(ans_probs, axis=1)
         return inverse_entropy, max_index
 
     def ask_expert(self, batch, pred_qs):
         output_probs = self.expert.output_by_question(batch, pred_qs)
         max_index = np.argmax(output_probs, axis=1)
-        inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
+        #inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
+        inverse_entropy = np.max(output_probs, axis=1)
         return inverse_entropy, max_index
 
     def CQ_similarity(self, content, keyterm):

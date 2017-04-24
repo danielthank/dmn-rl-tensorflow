@@ -6,7 +6,7 @@ import tensorflow as tf
 from functools import partial
 
 from expert.base_model import BaseModel
-from tf_helper.nn import prelu
+from tf_helper.nn import prelu, batch_norm
 from tf_helper.model_utils import get_sequence_length
 from ren_helper.dynamic_memory_cell import DynamicMemoryCell
 
@@ -67,7 +67,11 @@ class REN(BaseModel):
                 initializer=normal_initializer,
                 activation=activation)
 
-            self.output = tf.nn.softmax(logits)
+            logits = tf.contrib.layers.batch_norm(logits, decay=0.9, is_training=is_training, center=True, scale=True,
+                                                  updates_collections=None, scope='BatchNorm')
+
+            # self.output = tf.nn.softmax(logits)
+            self.output = logits
             predicts = tf.argmax(logits, 1)
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=answer)
             self.total_loss = tf.reduce_mean(cross_entropy)

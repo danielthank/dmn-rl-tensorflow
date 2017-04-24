@@ -4,13 +4,14 @@ import copy
 import os
 import numpy as np
 import math
+import random
 class DataSet:
     def __init__(self, batch_size, xs, qs, ys, shuffle=True, name="dataset"):
         assert batch_size <= len(xs), "batch size cannot be greater than data size."
         self.name = name
-        self.xs = xs
-        self.qs = qs
-        self.ys = ys
+        self.xs = np.array(xs, dtype=np.int32)
+        self.qs = np.array(qs, dtype=np.int32)
+        self.ys = np.array(ys, dtype=np.int32)
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.count = len(self.xs)
@@ -29,28 +30,51 @@ class DataSet:
         else, 
             when the rest data is not enough, still see it as a batch
         '''
-        assert self.has_next_batch(full_batch), "End of epoch. Call 'complete_epoch()' to reset."
+        # assert self.has_next_batch(full_batch), "End of epoch. Call 'complete_epoch()' to reset."
         if full_batch :
             from_, to = self.current_index, self.current_index + self.batch_size
         else:
             from_, to = self.current_index, min(self.current_index + self.batch_size,self.count)
         cur_idxs = self.indexes[from_:to]
-        xs, qs, ys = zip(*[[self.xs[i], self.qs[i], self.ys[i]] for i in cur_idxs])
+        xs = self.xs[cur_idxs]
+        qs = self.qs[cur_idxs]
+        ys = self.ys[cur_idxs]
         self.current_index = to
         return xs, qs, ys
 
     def get_batch_cnt(self, cnt):
+        if not self.has_next_batch(cnt):
+            self.reset()
         from_, to = self.current_index, self.current_index + cnt
         cur_idxs = self.indexes[from_:to]
-        xs, qs, ys = zip(*[[self.xs[i], self.qs[i], self.ys[i]] for i in cur_idxs])
+        xs = self.xs[cur_idxs]
+        qs = self.qs[cur_idxs]
+        ys = self.ys[cur_idxs]
         self.current_index += cnt
         return xs, qs, ys
 
-    def has_next_batch(self,full_batch):
+    def get_bad_batch_cnt(self, cnt, vocab_size):
+        if not self.has_next_batch(cnt):
+            self.reset()
+        from_, to = self.current_index, self.current_index + cnt
+        cur_idxs = self.indexes[from_:to]
+        xs = self.xs[cur_idxs]
+        qs = self.qs[cur_idxs]
+        ys = np.zeros((cnt,), dtype=np.int32)
+        choose = np.random.rand(*qs.shape) < 0.2
+        choose[:, -1] = False
+        qs = qs * (~choose) + np.random.randint(2, vocab_size, size=qs.shape) * choose
+        self.current_index += cnt
+        return xs, qs, ys
+    """
+    def has_next_batch(self, full_batch):
         if full_batch:
             return self.current_index + self.batch_size <= self.count
         else:
             return self.current_index < self.count
+    """
+    def has_next_batch(self, cnt):
+        return self.current_index + cnt <= self.count
 
     def split_dataset(self, split_ratio):
         """ Splits a data set by split_ratio.

@@ -107,8 +107,12 @@ class BaseModel(object):
         try:
             for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
-                    batch = train_data.next_batch(full_batch = False)
-                    feed_dict = self.get_feed_dict(batch, is_train=True)
+                    batch_good = train_data.get_batch_cnt(params.batch_size*4//5)
+                    batch_bad = train_data.get_bad_batch_cnt(params.batch_size - params.batch_size*4//5, self.words.vocab_size)
+                    x = np.concatenate((batch_good[0], batch_bad[0]))
+                    q = np.concatenate((batch_good[1], batch_bad[1]))
+                    y = np.concatenate((batch_good[2], batch_bad[2]))
+                    feed_dict = self.get_feed_dict((x, q, y), is_train=True)
                     summary, _, global_step = self.train_batch(feed_dict)
 
                 self.summary_writer.add_summary(summary, global_step)
