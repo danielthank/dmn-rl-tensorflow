@@ -7,7 +7,8 @@ from tensorflow.contrib.rnn import static_bidirectional_rnn
 from tensorflow.contrib.layers import fully_connected, variance_scaling_initializer
 
 from learner.base_model import BaseModel
-from tf_helper.nn import weight, bias, dropout, batch_norm, variable_summary, gumbel_softmax
+from tf_helper.nn import weight, bias, dropout, batch_norm, variable_summary
+from tf_helper.nn import gumbel_softmax, attention_decoder
 from tf_helper.model_utils import get_sequence_length
 
 
@@ -131,7 +132,7 @@ class Seq2Seq(BaseModel):
 
         ## QG Branch
         with tf.variable_scope('QG_branch') as scope:
-            q_logprobs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous)
+            q_logprobs, chosen_idxs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous, is_training)
             q_probs = [tf.nn.softmax(out) for out in q_logprobs]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
@@ -181,6 +182,7 @@ class Seq2Seq(BaseModel):
 
         # QG output tensors
         self.q_probs = q_probs
+        self.chosen_idxs = chosen_idxs
         self.QG_total_loss = QG_total_loss
 
         # Dirsciminator output tensors
@@ -249,7 +251,7 @@ class Seq2Seq(BaseModel):
                                                                     loop_function=None)
         return q_logprobs[0]
 
-    def QG_branch(self, embedding, qg_q, qg_story, feed_previous):
+    def QG_branch(self, embedding, qg_q, qg_story, feed_previous, is_training):
         params = self.params
         L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, A = params.seq2seq_hidden_size, self.words.vocab_size
@@ -264,6 +266,9 @@ class Seq2Seq(BaseModel):
         decoder_inputs = tf.concat(axis=1, values=[go_pad, qg_q]) # [N, Q+1, V]
         decoder_inputs = tf.unstack(decoder_inputs, axis=1)[:-1] # Q * [N, V]
 
+        ## output idxs ##
+        chosen_idxs = []
+
         ## question module rnn cell ##
         #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
@@ -272,9 +277,15 @@ class Seq2Seq(BaseModel):
         ## decoder loop function ##
         def _loop_fn(prev, i):
             # prev = tf.matmul(prev, proj_w) + proj_b
-            prev_symbol = tf.argmax(prev, 1)
+            prev_symbol = tf.cond(tf.logical_and(is_training, feed_previous),
+                                  lambda: gumbel_softmax(prev, 1),
+                                  lambda: tf.argmax(prev, 1))
+            chosen_idxs.append(prev_symbol)
             emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
-            return emb_prev
+            next_inp = tf.cond(feed_previous,
+                               lambda: emb_prev,
+                               lambda: decoder_inputs[i])
+            return next_inp
         ## decoder ##
         def decoder(feed_previous_bool):
             loop_function = _loop_fn if feed_previous_bool else None
@@ -287,10 +298,19 @@ class Seq2Seq(BaseModel):
                                                                             output_size=self.words.vocab_size,
                                                                             loop_function=loop_function)
                 return q_logprobs
+        """
+        q_logprobs = tf.cond(feed_previous,
+                             lambda: decoder(True),
+                             lambda: decoder(False))
+        """
+        q_logprobs = decoder(True)
 
-        return tf.cond(feed_previous,
-                        lambda: decoder(True),
-                        lambda: decoder(False))
+        last_symbol = tf.cond(tf.logical_and(is_training, feed_previous),
+                              lambda: gumbel_softmax(q_logprobs[-1], 1),
+                              lambda: tf.argmax(q_logprobs[-1], 1))
+        chosen_idxs.append(last_symbol)
+        assert len(chosen_idxs) == Q
+        return q_logprobs, chosen_idxs
         # q_logprobs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
         # return q_outputs
 

@@ -122,10 +122,11 @@ class BaseModel(object):
         raise NotImplementedError()
 
     def get_question(self, feed_dict):
-        q_probs = self.sess.run(self.q_probs, feed_dict=feed_dict)
-        q_idxes = np.argmax(np.stack(q_probs, axis=1), axis=2)
-        # assert q_idxes.shape == (self.params.batch_size, self.params.question_size)
-        return q_idxes
+        q_probs, chosen_idxs = self.sess.run([self.q_probs, self.chosen_idxs], feed_dict=feed_dict)
+        #q_idxs = np.argmax(np.stack(q_probs, axis=1), axis=2)
+        q_idxs = np.stack(chosen_idxs, axis=1)
+        # assert q_idxs.shape == (self.params.batch_size, self.params.question_size)
+        return q_idxs
 
     def get_rewards(self, batch, pred_qs):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
@@ -141,7 +142,7 @@ class BaseModel(object):
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         #tot_rewards = np.exp(expert_entropys)
-        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 10. * exist_rewards
+        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 1. * exist_rewards
         #tot_rewards = np.random.rand(*tot_rewards.shape)
         return tot_rewards, expert_anses, rep_rewards
 
