@@ -4,15 +4,19 @@ import random
 
 from data_helper.data_utils import DataSet, WordTable
 
-SPLIT_RE = re.compile('(\W+)?')
 def tokenize(sentence):
     """
     Tokenize a string by splitting on non-word characters and stripping whitespace.
     """
     ret = []
-    for token in re.split(SPLIT_RE, sentence):
+    #for token in re.split('\W+', sentence):
+    for token in sentence.split(' '):
         token = token.strip()
-        if token:
+        if not len(token):
+            continue
+        if token[-1] == '.' or token[-1] == '?':
+            token = token[:-1]
+        if len(token):
             ret.append(token.lower())
     return ret
 

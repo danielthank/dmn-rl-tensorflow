@@ -194,7 +194,6 @@ class BaseModel(object):
         return output.strip()
 
     def decode(self, data, outputfile, inputfile, all=True):
-        tqdm.write("Write decoded output...")
         num_batches = data.num_batches
         for _ in range(num_batches):
             batch = data.next_batch()
@@ -217,7 +216,6 @@ class BaseModel(object):
             if not all:
                 break
         data.reset()
-        tqdm.write("Finished")
 
         for i, word in enumerate(self.words.idx2word):
             print(i, word)
@@ -230,7 +228,7 @@ class BaseModel(object):
             sentence_cnt = 0;
             for line in inputfile:
                 tokens = tokenize(line)
-                if '?' in tokens:
+                if '?' in line:
                     word_cnt = 0
                     for token in tokens:
                         if token in self.words.word2idx:

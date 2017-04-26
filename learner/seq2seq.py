@@ -246,6 +246,9 @@ class Seq2Seq(BaseModel):
                                                                     cell=q_cell,
                                                                     output_size=self.words.vocab_size,
                                                                     loop_function=None)
+        q_logprobs[0] = tf.contrib.layers.batch_norm(q_logprobs[0], decay=0.9, is_training=self.is_training, center=True, scale=True,
+                                                     updates_collections=None, scope='BatchNorm')
+
         return q_logprobs[0]
 
     def QG_branch(self, embedding, qg_q, qg_story, feed_previous):

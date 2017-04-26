@@ -60,10 +60,10 @@ class DataSet:
         cur_idxs = self.indexes[from_:to]
         xs = self.xs[cur_idxs]
         qs = self.qs[cur_idxs]
-        ys = np.zeros((cnt,), dtype=np.int32)
-        choose = np.random.rand(*qs.shape) < 0.2
-        choose[:, -1] = False
-        qs = qs * (~choose) + np.random.randint(2, vocab_size, size=qs.shape) * choose
+        ys = np.ones((cnt,), dtype=np.int32) # <go>
+        choose = np.random.rand(*qs.shape) < 0.5
+        choose[:, -1] = False # do not change <eos>
+        qs = qs * (~choose) + np.random.randint(2, vocab_size, size=qs.shape) * choose # do not change to <eos> or <go>
         self.current_index += cnt
         return xs, qs, ys
     """
