@@ -145,7 +145,7 @@ def main(_):
                 raise Exception("incompatible main model with load model!")
             params = params._replace(**load_params)
         else:
-            if not args.action == "test":
+            if args.action == "train":
                 if tf.gfile.Exists(save_dir):
                     tf.gfile.DeleteRecursively(save_dir)
                 os.makedirs(save_dir, exist_ok=True)

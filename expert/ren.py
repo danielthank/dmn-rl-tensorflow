@@ -67,6 +67,9 @@ class REN(BaseModel):
                                      initializer=normal_initializer,
                                      activation=activation)
 
+            logits = tf.contrib.layers.batch_norm(logits, decay=0.9, is_training=is_training, center=True, scale=True,
+                                                  updates_collections=None, scope='BatchNorm')
+
             self.ans_logits = logits
             self.output = tf.nn.softmax(logits)
             predicts = tf.argmax(logits, 1)

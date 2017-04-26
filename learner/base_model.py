@@ -320,11 +320,11 @@ class BaseModel(object):
             for epoch_no in range(num_epochs):
                 r = []
                 tot_J = []
-                """
+
                 QA_x_mem.reset()
                 QA_q_mem.reset()
                 QA_y_mem.reset()
-                """
+
                 tot_QA_loss = [0.]
                 tot_QA_acc = [0.]
                 for i in range(num_batches):
@@ -430,24 +430,28 @@ class BaseModel(object):
         ans_probs = self.sess.run(self.QA_ans, feed_dict=feed_dict)
         #assert ans_probs.shape == (self.params.batch_size, self.words.vocab_size)
         max_index = np.argmax(ans_probs, axis=1)
-        inverse_entropy = np.sum(np.log(ans_probs + 1e-20) * ans_probs, axis=1)
+        #inverse_entropy = np.sum(np.log(ans_probs + 1e-20) * ans_probs, axis=1)
+        inverse_entropy = np.max(ans_probs, axis=1)
         return inverse_entropy, max_index
         """
         ans_logits = self.sess.run(self.QA_ans_logits, feed_dict=feed_dict)
         max_index = np.argmax(ans_logits, axis=1)
-        max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        # except <eos> and <go>
+        max_logits_norm = (np.max(ans_logits[:, 2:], axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
 
     def ask_expert(self, batch, pred_qs):
         """
         output_probs = self.expert.output_by_question(batch, pred_qs)
         max_index = np.argmax(output_probs, axis=1)
-        inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
+        #inverse_entropy = np.sum(np.log(output_probs + 1e-20) * output_probs, axis=1)
+        inverse_entropy = np.max(output_probs, axis=1)
         return inverse_entropy, max_index
         """
         ans_logits = self.expert.output_by_question(batch, pred_qs)
         max_index = np.argmax(ans_logits, axis=1)
-        max_logits_norm = (np.max(ans_logits[:, 1:], axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        # except <eos> and <go>
+        max_logits_norm = (np.max(ans_logits[:, 2:], axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
 
     def CQ_similarity(self, content, keyterm):
