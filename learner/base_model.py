@@ -45,7 +45,7 @@ EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
 
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
-    def __init__(self, words, params, expert_params, *args):
+    def __init__(self, words, params, args):
         ## words ##
         self.words = words
 
@@ -63,7 +63,8 @@ class BaseModel(object):
 
         ## build model graph ##
         self.graph = tf.Graph()
-        self.sess = tf.Session(graph=self.graph)
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=self.params.gpu_fraction)
+        self.sess = tf.Session(graph=self.graph, config=tf.ConfigProto(gpu_options=gpu_options))
         with self.graph.as_default():
             with tf.variable_scope('Learner', initializer=tf.contrib.layers.xavier_initializer()):
                 print("Building Learner model...")
@@ -138,6 +139,7 @@ class BaseModel(object):
     def get_rewards(self, batch, pred_qs):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
         learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
+        discriminator_probs = self.ask_discriminator(batch, pred_qs)
         """
         repeats = (pred_qs[:, :pred_qs.shape[1]-1] == pred_qs[:, 1:pred_qs.shape[1]])
         rep_rewards = -1.0 * np.sum(repeats, axis=1) / pred_qs.shape[1]
@@ -149,7 +151,7 @@ class BaseModel(object):
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         #tot_rewards = np.exp(expert_entropys)
-        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 1. * exist_rewards
+        tot_rewards = expert_entropys - learner_entropys + (-4.0) * rep_rewards + 1. * exist_rewards + 1. * discriminator_probs
         #tot_rewards = np.random.rand(*tot_rewards.shape)
         return tot_rewards, expert_anses, rep_rewards
 
@@ -439,6 +441,12 @@ class BaseModel(object):
         # except <eos> and <go>
         max_logits_norm = (np.max(ans_logits[:, 2:], axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
+
+    def ask_discriminator(self, batch, pred_qs):
+        feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=False)
+        feed_dict[self.q] = pred_qs
+        probs = self.sess.run(self.D_probs, feed_dict=feed_dict)
+        return probs
 
     def ask_expert(self, batch, pred_qs):
         """

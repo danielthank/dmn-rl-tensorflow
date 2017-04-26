@@ -30,7 +30,8 @@ class BaseModel(object):
 
         ## build graph ##
         self.graph = tf.Graph()
-        self.sess = tf.Session(graph=self.graph)
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=self.params.gpu_fraction)
+        self.sess = tf.Session(graph=self.graph, config=tf.ConfigProto(gpu_options=gpu_options))
         with self.graph.as_default():
             default_init = xavier_initializer()
             with tf.variable_scope('Expert', initializer=default_init):

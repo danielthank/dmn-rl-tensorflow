@@ -58,6 +58,7 @@ parser.add_argument('--rl_learning_rate', default=0.0001, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
 parser.add_argument('--acc_period', default=10, type=int)
 parser.add_argument('--val_period', default=40, type=int)
+parser.add_argument('--gpu_fraction', default=0.5, type=float)
 
 # dmn params
 parser.add_argument('--dmn_memory_step', default=3, type=int)

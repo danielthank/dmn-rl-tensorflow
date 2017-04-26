@@ -95,7 +95,7 @@ class Seq2Seq(BaseModel):
         ## Discriminator
         with tf.variable_scope("Discriminator") as scope:
             D_logits = self.Discriminator(D_embedding, question)
-            D_probs = tf.sigmoid(D_logits)
+            D_probs = tf.nn.softmax(D_logits)[:, 1]
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
             # cross entropy loss
