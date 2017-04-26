@@ -54,6 +54,7 @@ parser.add_argument('--task', default='1', type=str, choices=[str(i) for i in ra
 parser.add_argument('--batch_size', default=256, type=int)
 parser.add_argument('--num_epochs', default=256, type=int)
 parser.add_argument('--learning_rate', default=0.002, type=float)
+parser.add_argument('--rl_learning_rate', default=0.0001, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
 parser.add_argument('--acc_period', default=10, type=int)
 parser.add_argument('--val_period', default=40, type=int)

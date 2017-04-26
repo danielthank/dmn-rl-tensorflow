@@ -31,6 +31,13 @@ def get_rep_rewards(qs, V):
                 if_reps[qs[b, i]] = True
     return tot_reps
 
+def get_exist_rewards(batch, anses):
+    A_in_C = np.equal(np.array(batch[0]), anses[:, None, None])
+    exist_rewards = np.any(A_in_C, axis=(1, 2))
+    exist_rewards = np.logical_and(exist_rewards, np.not_equal(anses, 0))
+    return exist_rewards
+
+
 ## accessible expert model ##
 EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
                 'expert_ren': EXPERT_REN}
@@ -122,10 +129,11 @@ class BaseModel(object):
         raise NotImplementedError()
 
     def get_question(self, feed_dict):
-        q_probs = self.sess.run(self.q_probs, feed_dict=feed_dict)
-        q_idxes = np.argmax(np.stack(q_probs, axis=1), axis=2)
-        # assert q_idxes.shape == (self.params.batch_size, self.params.question_size)
-        return q_idxes
+        q_probs, chosen_idxs = self.sess.run([self.q_probs, self.chosen_idxs], feed_dict=feed_dict)
+        #q_idxs = np.argmax(np.stack(q_probs, axis=1), axis=2)
+        q_idxs = np.stack(chosen_idxs, axis=1)
+        # assert q_idxs.shape == (self.params.batch_size, self.params.question_size)
+        return q_idxs
 
     def get_rewards(self, batch, pred_qs):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
@@ -135,13 +143,13 @@ class BaseModel(object):
         rep_rewards = -1.0 * np.sum(repeats, axis=1) / pred_qs.shape[1]
         """
         rep_rewards = get_rep_rewards(pred_qs, self.words.vocab_size).astype('float32')
-        exist_rewards = np.any(np.equal(np.array(batch[0]), expert_anses[:, None, None]), axis=(1, 2))
+        exist_rewards = get_exist_rewards(batch, expert_anses)
         #CQ_rewards = self.CQ_reward(batch[0], pred_qs)
 
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         #tot_rewards = np.exp(expert_entropys)
-        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 10. * exist_rewards
+        tot_rewards = sigmoid(expert_entropys) + (-4.0) * rep_rewards + 1. * exist_rewards
         #tot_rewards = np.random.rand(*tot_rewards.shape)
         return tot_rewards, expert_anses, rep_rewards
 
@@ -170,7 +178,7 @@ class BaseModel(object):
 
         #rl_train_list = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
         #rl_train_list = [self.merged_RL, self.global_step, self.global_step, self.J]
-        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards, self.baseline_t: self.baseline})
         return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses, rep
 
     def q2string(self, q):
@@ -215,7 +223,7 @@ class BaseModel(object):
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
         #rl_test_list = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
-        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: (rewards - self.baseline)})
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards, self.baseline_t: self.baseline})
         return self.sess.run(self.rl_test_list, feed_dict=feed_dict), np.mean(rewards)
 
     def D_train(self, true_qs, bad_q_mem):
@@ -330,7 +338,6 @@ class BaseModel(object):
                         print()
                     r.append(mean_r)
                     tot_J.append(J)
-                    """
                     QA_x_mem.append(batch[0])
                     QA_q_mem.append(pred_qs)
                     QA_y_mem.append(expert_anses)
@@ -341,14 +348,11 @@ class BaseModel(object):
                                                                            num_batch=2)
                         tot_QA_loss += QA_loss
                         tot_QA_acc += acc
-                    """
                 self.baseline = 0.9*self.baseline + 0.1*np.mean(r) if not self.baseline == 0. else np.mean(r)
 
                 var_summ = self.sess.run(self.merged_VAR)
-                """
                 if not self.merged_QA == None:
                     self.summary_writer.add_summary(QA_summ, global_step)
-                """
                 self.summary_writer.add_summary(rl_summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 train_data.reset()
@@ -443,7 +447,7 @@ class BaseModel(object):
         """
         ans_logits = self.expert.output_by_question(batch, pred_qs)
         max_index = np.argmax(ans_logits, axis=1)
-        max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
+        max_logits_norm = (np.max(ans_logits[:, 1:], axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
 
     def CQ_similarity(self, content, keyterm):
