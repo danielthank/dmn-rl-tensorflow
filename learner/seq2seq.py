@@ -148,15 +148,18 @@ class Seq2Seq(BaseModel):
         # Policy Gradient
         chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
         rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
+        baseline_t = tf.placeholder(tf.float32, shape=[], name='baseline')
+        advantages = rewards - baseline_t
         tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
+        tf.summary.scalar('advantages', tf.reduce_mean(advantages), collections=["RL_SUMM"])
 
         with tf.name_scope("PolicyGradient"):
             stack_q_probs = tf.stack(q_probs, axis=1) # Q * [N, A] -> [N, Q, A]
             act_probs = stack_q_probs * chosen_one_hot # [N, Q, A]
             act_probs = tf.reduce_prod(tf.reduce_sum(act_probs, axis=2), axis=1) # [N, Q, A] -> [N, Q] -> [N]
 
-            # J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*rewards) + params.seq2seq_weight_decay*tf.add_n(tf.get_collection('l2'))
-            J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*rewards) 
+            # J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*advantages) + params.seq2seq_weight_decay*tf.add_n(tf.get_collection('l2'))
+            J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*advantages)
 
 
         # placeholders
@@ -172,6 +175,7 @@ class Seq2Seq(BaseModel):
         # policy gradient placeholders
         self.chosen_one_hot = chosen_one_hot
         self.rewards = rewards
+        self.baseline_t = baseline_t
 
         # QA output tensors
         self.QA_ans_logits = QA_ans_logits
@@ -389,9 +393,9 @@ class Seq2Seq(BaseModel):
             #                       "loss"]
             opt_op = tf.contrib.layers.optimize_loss(self.J,
                                                      self.global_step,
-                                                     learning_rate=self.params.learning_rate,
+                                                     learning_rate=self.params.rl_learning_rate,
                                                      optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
+                                                     clip_gradients=1.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
                                                      summaries=OPTIMIZER_SUMMARIES)
             for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
