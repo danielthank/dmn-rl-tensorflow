@@ -98,14 +98,19 @@ class Seq2Seq(BaseModel):
             variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
             variable_summary(variables)
             # cross entropy loss
-            re_D_labels = tf.cast(tf.reshape(D_labels, shape=[-1, 1]), tf.float32)
-            D_cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logits, labels=re_D_labels)
+            #re_D_labels = tf.cast(tf.reshape(D_labels, shape=[-1, 1]), tf.float32)
+            re_D_labels = tf.cast(D_labels, 'int32')
+            #D_cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=D_logits, labels=re_D_labels)
+            D_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=D_logits, labels=re_D_labels)
             D_loss = tf.reduce_mean(D_cross_entropy)
             D_total_loss = D_loss
             # accuracy
-            D_predicts = tf.greater_equal(D_probs, 0.5)
-            D_corrects = tf.equal(D_predicts, D_labels)
+            #D_predicts = tf.greater_equal(D_probs, 0.5)
+            D_predicts = tf.cast(tf.argmax(D_logits, 1), 'int32')
+            D_corrects = tf.equal(D_predicts, re_D_labels)
             D_accuracy = tf.reduce_mean(tf.cast(D_corrects, tf.float32))
+            tf.summary.scalar('D_loss', D_total_loss, collections=["D_SUMM"])
+            tf.summary.scalar('D_acc', D_accuracy, collections=["D_SUMM"])
 
 
         ## QA Branch
@@ -209,19 +214,42 @@ class Seq2Seq(BaseModel):
         params = self.params 
         Q = params.question_size
         V = params.seq2seq_hidden_size
+        filter_sizes = [1, 3]
+        num_filters = [3, 5]
+        
         with tf.name_scope('D_QuestionReader'):
             D_q = tf.nn.embedding_lookup(D_embedding, question) # [N, Q, V]
-            D_q = tf.reshape(D_q, shape=[-1, Q*V]) # [N, Q, V] -> [N, Q*V]
-
+            #D_q = tf.expand_dims(D_q, -1) # [N, Q, V, 1]
+            D_qf = tf.reshape(D_q, shape=[-1, Q*V]) # [N, Q, V] -> [N, Q*V]
+        #[filter_height, filter_width, in_channels, out_channels]
+        """
+        pooled = []
+        for filter_size, num_filter in zip(filter_sizes, num_filters):
+            with tf.variable_scope("conv-max_%s" % filter_size):
+                
+                weight_initializer = variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=False)
+                bias_initializer = variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True)
+                conv = tf.contrib.layers.convolution2d(inputs = D_q,
+                                                num_outputs = num_filter,
+                                                kernel_size = [filter_size, V],
+                                                stride = [1, 1],
+                                                padding = 'VALID',
+                                                activation_fn = tf.nn.relu,
+                                                weights_initializer = weight_initializer,
+                                                biases_initializer = bias_initializer) # [N, Q-k+1, 1, num_filter]
+                pool = tf.contrib.layers.max_pool2d(inputs = conv,
+                                                    kernel_size = [Q - filter_size + 1, 1],
+                                                    stride = [1, 1],
+                                                    padding = 'valid') #[N, 1, 1, num_filter]
+                pooled.append(pool)
+        D_qf = tf.reshape(tf.concat(pooled, 3), [-1, sum(num_filters)]) #[N, num_filters]
+        """
         with tf.variable_scope("fc_layers"):
             weight_initializer = variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=False)
             bias_initializer = variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True)
-            stack_args = [[512, tf.nn.relu],
-                          [512, tf.nn.relu],
-                          [512, tf.nn.relu],
-                          [512, tf.nn.relu],
-                          [1, None]]
-            D_logits = tf.contrib.layers.stack(D_q,
+            stack_args = [[32, tf.nn.relu],
+                          [2, None]]
+            D_logits = tf.contrib.layers.stack(D_qf,
                                                fully_connected,
                                                stack_args,
                                                weights_initializer=weight_initializer,
@@ -306,7 +334,7 @@ class Seq2Seq(BaseModel):
             #                       "loss"]
             opt_op = tf.contrib.layers.optimize_loss(self.D_total_loss,
                                                      self.global_step,
-                                                     learning_rate=self.params.learning_rate,
+                                                     learning_rate=self.params.learning_rate * 10,
                                                      optimizer=tf.train.AdamOptimizer,
                                                      clip_gradients=5.,
                                                      learning_rate_decay_fn=learning_rate_decay_fn,
@@ -320,7 +348,7 @@ class Seq2Seq(BaseModel):
             def learning_rate_decay_fn(lr, global_step):
                 return tf.train.exponential_decay(lr,
                                                   global_step,
-                                                  decay_steps=100,
+                                                  decay_steps=5000,
                                                   decay_rate=0.95,
                                                   staircase=True)
             #OPTIMIZER_SUMMARIES = ["learning_rate",

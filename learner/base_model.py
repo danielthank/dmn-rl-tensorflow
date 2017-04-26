@@ -240,13 +240,17 @@ class BaseModel(object):
             for epoch_no in range(num_epochs):
                 QA_summ,  _, global_step = self.pre_train_batch(batch)
                 (QA_loss, QG_loss, QA_acc, global_step), pred_qs, rewards = self.pre_test_batch(batch)
-                #bad_q_mem.append(pred_qs[rewards < 0.9])
-                #D_summ, global_step, D_loss, D_acc = self.D_train(true_qs, bad_q_mem)
+                bad_q_mem.append(pred_qs[rewards < 0.9])
+                print("{} bad question push".format(len(pred_qs[rewards < 0.9])))
+                for ep_j in range(1):
+                    D_summ, global_step, D_loss, D_acc = self.D_train(true_qs, bad_q_mem)
+                    if ep_j%1 == 0:
+                        print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
+                
                 var_summ = self.sess.run(self.merged_VAR)
                 print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, QA_ACC = {:.4f}".format(epoch_no, num_epochs, global_step, QA_loss, QG_loss, QA_acc))
-                #print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
                 print()
-                #self.summary_writer.add_summary(D_summ, global_step)
+                self.summary_writer.add_summary(D_summ, global_step)
                 self.summary_writer.add_summary(QA_summ, global_step)
                 self.summary_writer.add_summary(var_summ, global_step)
                 if (epoch_no + 1) % params.acc_period == 0:
