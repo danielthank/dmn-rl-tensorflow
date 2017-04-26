@@ -427,7 +427,7 @@ class BaseModel(object):
         return inverse_entropy, max_index
         """
         ans_logits = self.sess.run(self.QA_ans_logits, feed_dict=feed_dict)
-        max_index = np.argmax(ans_logits, axis=1)
+        max_index = np.argmax(ans_logits[:, 2:], axis=1) + 2 # except <eos> and <go>
         max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
 
@@ -440,7 +440,7 @@ class BaseModel(object):
         return inverse_entropy, max_index
         """
         ans_logits = self.expert.output_by_question(batch, pred_qs)
-        max_index = np.argmax(ans_logits, axis=1)
+        max_index = np.argmax(ans_logits[:, 2:], axis=1) + 2 # except <eos> and <go>
         max_logits_norm = (np.max(ans_logits, axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
 
