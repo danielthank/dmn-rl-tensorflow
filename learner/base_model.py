@@ -45,7 +45,7 @@ EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
 
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
-    def __init__(self, words, params, args):
+    def __init__(self, words, params, expert_params, *args):
         ## words ##
         self.words = words
 
@@ -136,10 +136,11 @@ class BaseModel(object):
         # assert q_idxs.shape == (self.params.batch_size, self.params.question_size)
         return q_idxs
 
-    def get_rewards(self, batch, pred_qs):
+    def get_rewards(self, batch, pred_qs, is_discriminator=False):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
-        learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         discriminator_probs = self.ask_discriminator(batch, pred_qs)
+        if not is_discriminator:
+            learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         """
         repeats = (pred_qs[:, :pred_qs.shape[1]-1] == pred_qs[:, 1:pred_qs.shape[1]])
         rep_rewards = -1.0 * np.sum(repeats, axis=1) / pred_qs.shape[1]
@@ -151,7 +152,11 @@ class BaseModel(object):
         #tot_rewards = CQ_rewards#+0.*(np.exp(expert_entropys)-0.5)
         #tot_rewards = np.exp(expert_entropys) - np.exp(learner_entropys)
         #tot_rewards = np.exp(expert_entropys)
-        tot_rewards = expert_entropys - learner_entropys + (-4.0) * rep_rewards + 1. * exist_rewards + 1. * discriminator_probs
+        if not is_discriminator:
+            tot_rewards = expert_entropys + (0) * learner_entropys + (-4.0) * rep_rewards + 1. * exist_rewards + 1. * discriminator_probs
+        else:
+            tot_rewards = expert_entropys + (-4.0) * rep_rewards + 1. * exist_rewards + (-1.) * discriminator_probs
+
         #tot_rewards = np.random.rand(*tot_rewards.shape)
         return tot_rewards, expert_anses, rep_rewards
 
@@ -206,7 +211,7 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False)
 
         pred_qs = self.get_question(feed_dict)
-        rewards, expert_anses, rep = self.get_rewards(batch, pred_qs)
+        rewards, expert_anses, rep = self.get_rewards(batch, pred_qs, is_discriminator=True)
         print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'Rep:', rep[0])
 
         return self.sess.run(self.pre_test_list, feed_dict=feed_dict), pred_qs, rewards
@@ -269,8 +274,8 @@ class BaseModel(object):
             for epoch_no in range(num_epochs):
                 QA_summ,  _, global_step = self.pre_train_batch(batch)
                 (QA_loss, QG_loss, QA_acc, global_step), pred_qs, rewards = self.pre_test_batch(batch)
-                bad_q_mem.append(pred_qs[rewards < 0.9])
-                print("{} bad question push".format(len(pred_qs[rewards < 0.9])))
+                bad_q_mem.append(pred_qs[rewards < 3])
+                print("{} bad question push".format(len(pred_qs[rewards < 3])))
                 for ep_j in range(1):
                     D_summ, global_step, D_loss, D_acc = self.D_train(true_qs, bad_q_mem)
                     if ep_j%1 == 0:
