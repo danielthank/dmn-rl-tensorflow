@@ -4,6 +4,28 @@ from tensorflow.python.util import nest
 from tensorflow.contrib.rnn.python.ops.core_rnn_cell_impl import _linear as linear
 import numpy as np
 
+
+def create_opt(scope_name, loss, learning_rate, global_step):
+    with tf.variable_scope(scope_name) as scope:
+        def learning_rate_decay_fn(lr, global_step):
+            return tf.train.exponential_decay(lr,
+                                              global_step,
+                                              decay_steps=5000,
+                                              decay_rate=0.95,
+                                              staircase=True)
+        #OPTIMIZER_SUMMARIES = ["learning_rate",
+        #                       "loss"]
+        opt_op = tf.contrib.layers.optimize_loss(loss,
+                                                 global_step,
+                                                 learning_rate=learning_rate,
+                                                 optimizer=tf.train.AdamOptimizer,
+                                                 clip_gradients=5.,
+                                                 learning_rate_decay_fn=learning_rate_decay_fn)
+        # for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
+            # tf.add_to_collection("D_SUMM", var)
+        return opt_op
+
+
 def weight(name, shape, init='he', range=None):
     """ Initializes weight.
     :param name: Variable name
@@ -42,7 +64,7 @@ def variable_summary(vars):
         with tf.name_scope('summaries'):
             mean = tf.reduce_mean(var)
             tf.summary.scalar('mean/' + var.name, mean, collections=collections)
-            tf.summary.scalar('stddev/' + var.name, tf.sqrt(tf.reduce_mean(tf.square(var - mean))), collections=collections)
+            # tf.summary.scalar('stddev/' + var.name, tf.sqrt(tf.reduce_mean(tf.square(var - mean))), collections=collections)
             tf.summary.histogram(var.name, var, collections=collections)
 
 def _get_dims(shape):

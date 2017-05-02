@@ -4,8 +4,7 @@ from data_helper.read_data import read_babi
 
 def run_baseline(task, args, MainModel):
     ## data set ##
-    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(task, args.batch_size,
-                                                                                        False)
+    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(task, args.batch_size, False)
     val = train.split_dataset(args.val_ratio)
     print("training count: {}".format(train.count))
     print("testing count: {}".format(test.count))

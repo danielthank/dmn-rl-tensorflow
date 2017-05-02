@@ -8,8 +8,8 @@ from tensorflow.contrib.layers import fully_connected, variance_scaling_initiali
 
 from learner.base_model import BaseModel
 from tf_helper.nn import weight, bias, dropout, batch_norm, variable_summary
-from tf_helper.nn import gumbel_softmax, attention_decoder
-from tf_helper.model_utils import get_sequence_length
+from tf_helper.nn import gumbel_softmax, attention_decoder, create_opt
+from tf_helper.model_utils import get_sequence_length, positional_encoding
 
 
 EPS = 1e-20
@@ -25,8 +25,6 @@ class Seq2Seq(BaseModel):
         L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, A = params.seq2seq_hidden_size, self.words.vocab_size
 
-        # initialize self
-        # placeholders
         input = tf.placeholder('int32', shape=[None, F, L], name='x')
         question = tf.placeholder('int32', shape=[None, Q], name='q')
         answer = tf.placeholder('int32', shape=[None], name='y')
@@ -34,70 +32,90 @@ class Seq2Seq(BaseModel):
         fact_counts = get_sequence_length(input)
         self.is_training = tf.placeholder(tf.bool)
         feed_previous = tf.placeholder(tf.bool)
+        story_positional_encoding = positional_encoding(L, V)
+        question_positional_encoding = positional_encoding(Q, V)
+        embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
 
         D_labels = tf.placeholder('bool', shape=[None], name='D_labels')
 
-        # Prepare parameters
-        #gru = rnn.GRUCell(V)
-        gru = rnn.LSTMCell(V)
-        story_positional_encoding = self.positional_encoding(L, V)
-        question_positional_encoding = self.positional_encoding(Q, V)
-        embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
+        with tf.variable_scope('QA', initializer=tf.contrib.layers.xavier_initializer()):
+            qa_embedding = tf.get_variable('qa_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+            qa_embedding = qa_embedding * embedding_mask
+            with tf.variable_scope('SentenceReader'):
+                qa_story = tf.nn.embedding_lookup(qa_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
+                # apply positional encoding
+                qa_story = story_positional_encoding * qa_story
+                qa_story = tf.reduce_sum(qa_story, 2)  # [batch, story, embedding_size]
+                qa_story = dropout(qa_story, 0.5, self.is_training)
+                (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(rnn.LSTMCell(V),
+                                                                                       rnn.LSTMCell(V),
+                                                                                       qa_story,
+                                                                                       sequence_length=fact_counts,
+                                                                                       dtype=tf.float32)
+                qa_story = qa_states_fw + qa_states_bw
+            with tf.name_scope('QuestionReader'):
+                qa_q = tf.nn.embedding_lookup(qa_embedding, question) # [N, Q, V]
+                qa_q = question_positional_encoding * qa_q
+                qa_q = tf.reduce_sum(qa_q, 1) # [N, V]
+                qa_q = dropout(qa_q, 0.5, self.is_training)
 
-        D_embedding = tf.get_variable('D_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
-        D_embedding = D_embedding * embedding_mask
+            QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story)
+            QA_ans = tf.nn.softmax(QA_ans_logits)
+            #variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            #variable_summary(variables)
+            with tf.name_scope('Loss'):
+                # Cross-Entropy loss
+                QA_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=QA_ans_logits, labels=answer)
+                QA_loss = tf.reduce_mean(QA_cross_entropy)
+                #QA_total_loss = QA_loss + params.seq2seq_weight_decay * tf.add_n(tf.get_collection('l2'))
+                QA_total_loss = QA_loss
+            with tf.variable_scope('Accuracy'):
+                # Accuracy
+                predicts = tf.cast(tf.argmax(QA_ans_logits, 1), 'int32')
+                corrects = tf.equal(predicts, answer)
+                num_corrects = tf.reduce_sum(tf.cast(corrects, tf.float32))
+                QA_accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
+            tf.summary.scalar('loss', QA_total_loss, collections=["QA_SUMM"])
+            tf.summary.scalar('accuracy', QA_accuracy, collections=["QA_SUMM"])
 
-        qa_embedding = tf.get_variable('qa_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
-        qa_embedding = qa_embedding * embedding_mask
-        # variable_summary([qa_embedding])
+        with tf.variable_scope('QG', initializer=tf.contrib.layers.xavier_initializer()):
+            qg_embedding = tf.get_variable('qg_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+            qg_embedding = qg_embedding * embedding_mask
+            with tf.variable_scope('SentenceReader'):
+                qg_story = tf.nn.embedding_lookup(qg_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
+                # apply positional encoding
+                qg_story = story_positional_encoding * qg_story
+                qg_story = tf.reduce_sum(qg_story, 2)  # [batch, story, embedding_size]
+                qg_story = dropout(qg_story, 0.5, self.is_training)
+                (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(rnn.LSTMCell(V),
+                                                                                       rnn.LSTMCell(V),
+                                                                                       qg_story,
+                                                                                       sequence_length=fact_counts,
+                                                                                       dtype=tf.float32)
+                qg_story = qg_states_fw + qg_states_bw
+            with tf.name_scope('QuestionReader'):
+                qg_q = tf.nn.embedding_lookup(qg_embedding, question) # [N, Q, V]
+                qg_q = dropout(qg_q, 0.5, self.is_training)
+            q_logprobs, chosen_idxs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous, self.is_training)
+            q_probs = tf.nn.softmax(q_logprobs, dim=-1)
+            # variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            #variable_summary(variables)
+            with tf.name_scope('Loss'):
+                target_list = tf.unstack(tf.transpose(question)) # Q * [N]
+                # Cross-Entropy loss
+                QG_loss = tf.contrib.legacy_seq2seq.sequence_loss(tf.unstack(q_logprobs), target_list,
+                                                   [tf.ones(shape=tf.stack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
+                #QG_total_loss = QG_loss + params.seq2seq_weight_decay * tf.add_n(tf.get_collection('l2'))
+                QG_total_loss = QG_loss
+            tf.summary.scalar('loss', QG_total_loss, collections=["QG_SUMM"])
 
-        qg_embedding = tf.get_variable('qg_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
-        qg_embedding = qg_embedding * embedding_mask
-
-        with tf.variable_scope('QA_SentenceReader'):
-            qa_story = tf.nn.embedding_lookup(qa_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
-            # apply positional encoding
-            qa_story = story_positional_encoding * qa_story
-            qa_story = tf.reduce_sum(qa_story, 2)  # [batch, story, embedding_size]
-            qa_story = dropout(qa_story, 0.5, self.is_training)
-            (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(gru,
-                                                                                   gru,
-                                                                                   qa_story,
-                                                                                   sequence_length=fact_counts,
-                                                                                   dtype=tf.float32)
-            qa_story = qa_states_fw + qa_states_bw
-
-        with tf.variable_scope('QG_SentenceReader'):
-            qg_story = tf.nn.embedding_lookup(qg_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
-            # apply positional encoding
-            qg_story = story_positional_encoding * qg_story
-            qg_story = tf.reduce_sum(qg_story, 2)  # [batch, story, embedding_size]
-            qg_story = dropout(qg_story, 0.5, self.is_training)
-            (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(gru,
-                                                                                   gru,
-                                                                                   qg_story,
-                                                                                   sequence_length=fact_counts,
-                                                                                   dtype=tf.float32)
-            qg_story = qg_states_fw + qg_states_bw
-
-        with tf.name_scope('QA_QuestionReader'):
-            qa_q = tf.nn.embedding_lookup(qa_embedding, question) # [N, Q, V]
-            qa_q = question_positional_encoding * qa_q
-            qa_q = tf.reduce_sum(qa_q, 1) # [N, V]
-            qa_q = dropout(qa_q, 0.5, self.is_training)
-
-        with tf.name_scope('QG_QuestionReader'):
-            qg_q = tf.nn.embedding_lookup(qg_embedding, question) # [N, Q, V]
-            qg_q = dropout(qg_q, 0.5, self.is_training)
-            #qg_q = question_positional_encoding * qg_q
-            #qg_q = tf.reduce_sum(qg_q, 1) # [N, V]
-        
-        ## Discriminator
-        with tf.variable_scope("Discriminator") as scope:
+        with tf.variable_scope("Discriminator", initializer=tf.contrib.layers.xavier_initializer()):
+            D_embedding = tf.get_variable('D_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+            D_embedding = D_embedding * embedding_mask
             D_logits = self.Discriminator(D_embedding, question)
             D_probs = tf.nn.softmax(D_logits)[:, 1]
-            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-            variable_summary(variables)
+            #variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            #variable_summary(variables)
             # cross entropy loss
             #re_D_labels = tf.cast(tf.reshape(D_labels, shape=[-1, 1]), tf.float32)
             re_D_labels = tf.cast(D_labels, 'int32')
@@ -110,62 +128,22 @@ class Seq2Seq(BaseModel):
             D_predicts = tf.cast(tf.argmax(D_logits, 1), 'int32')
             D_corrects = tf.equal(D_predicts, re_D_labels)
             D_accuracy = tf.reduce_mean(tf.cast(D_corrects, tf.float32))
-            tf.summary.scalar('D_loss', D_total_loss, collections=["D_SUMM"])
-            tf.summary.scalar('D_acc', D_accuracy, collections=["D_SUMM"])
-
-
-        ## QA Branch
-        with tf.variable_scope('QA_branch') as scope:
-            QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story)
-            QA_ans = tf.nn.softmax(QA_ans_logits)
-            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-            variable_summary(variables)
-
-            with tf.name_scope('QA_Loss'):
-                # Cross-Entropy loss
-                QA_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=QA_ans_logits, labels=answer)
-                QA_loss = tf.reduce_mean(QA_cross_entropy)
-                #QA_total_loss = QA_loss + params.seq2seq_weight_decay * tf.add_n(tf.get_collection('l2'))
-                QA_total_loss = QA_loss
-
-            with tf.variable_scope('QA_Accuracy'):
-                # Accuracy
-                predicts = tf.cast(tf.argmax(QA_ans_logits, 1), 'int32')
-                corrects = tf.equal(predicts, answer)
-                num_corrects = tf.reduce_sum(tf.cast(corrects, tf.float32))
-                accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
-
-        ## QG Branch
-        with tf.variable_scope('QG_branch') as scope:
-            q_logprobs, chosen_idxs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous, self.is_training)
-            q_probs = tf.nn.softmax(q_logprobs, dim=-1)
-            variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
-            variable_summary(variables)
-
-            with tf.name_scope('QG_Loss'):
-                target_list = tf.unstack(tf.transpose(question)) # Q * [N]
-                # Cross-Entropy loss
-                QG_loss = tf.contrib.legacy_seq2seq.sequence_loss(tf.unstack(q_logprobs), target_list,
-                                                   [tf.ones(shape=tf.stack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
-                #QG_total_loss = QG_loss + params.seq2seq_weight_decay * tf.add_n(tf.get_collection('l2'))
-                QG_total_loss = QG_loss
+            tf.summary.scalar('loss', D_total_loss, collections=["D_SUMM"])
+            tf.summary.scalar('acc', D_accuracy, collections=["D_SUMM"])
 
         # Policy Gradient
-        chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
-        rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
-        baseline_t = tf.placeholder(tf.float32, shape=[], name='baseline')
-        advantages = rewards - baseline_t
-        tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
-        tf.summary.scalar('advantages', tf.reduce_mean(advantages), collections=["RL_SUMM"])
-
         with tf.name_scope("PolicyGradient"):
+            chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
+            rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
+            baseline_t = tf.placeholder(tf.float32, shape=[], name='baseline')
+            advantages = rewards - baseline_t
+            tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
+            tf.summary.scalar('advantages', tf.reduce_mean(advantages), collections=["RL_SUMM"])
             stack_q_probs = tf.transpose(q_probs, perm=[1, 0, 2]) # [Q , N, A] -> [N, Q, A]
             act_probs = stack_q_probs * chosen_one_hot # [N, Q, A]
             act_probs = tf.reduce_prod(tf.reduce_sum(act_probs, axis=2), axis=1) # [N, Q, A] -> [N, Q] -> [N]
-
             # J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*advantages) + params.seq2seq_weight_decay*tf.add_n(tf.get_collection('l2'))
             J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*advantages)
-
 
         # placeholders
         self.x = input
@@ -186,7 +164,7 @@ class Seq2Seq(BaseModel):
         self.QA_ans = QA_ans
         self.QA_total_loss = QA_total_loss
         self.num_corrects = num_corrects
-        self.accuracy = accuracy
+        self.QA_accuracy = QA_accuracy
 
         # QG output tensors
         self.q_probs = q_probs
@@ -203,17 +181,16 @@ class Seq2Seq(BaseModel):
 
         # optimizer ops
         if not forward_only:
-            self.RL_opt_op, RL_opt_sc = self.RLOpt()
-            self.Pre_opt_op, Pre_opt_sc = self.PreOpt()
-            self.QA_opt_op, QA_opt_sc = self.QAOpt()
-            self.D_opt_op, D_opt_sc = self.DOpt()
+            self.RL_opt_op = create_opt('RL_opt', self.J, self.params.rl_learning_rate, self.global_step)
+            self.Pre_opt_op = create_opt('Pre_opt', 0.5*self.QA_total_loss + 0.5*self.QG_total_loss, self.params.learning_rate, self.global_step)
+            self.QA_opt_op = create_opt('QA_opt', self.QA_total_loss, self.params.learning_rate, self.global_step)
+            self.D_opt_op = create_opt('D_opt', self.D_total_loss, self.params.learning_rate*10, self.global_step)
 
         # merged summary ops
         self.merged_D = tf.summary.merge_all(key='D_SUMM')
-        self.merged_PRE = tf.summary.merge_all(key='PRE_SUMM')
         self.merged_QA = tf.summary.merge_all(key='QA_SUMM')
+        self.merged_QG = tf.summary.merge_all(key='QG_SUMM')
         self.merged_RL = tf.summary.merge_all(key='RL_SUMM')
-        self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
 
     def Discriminator(self, D_embedding, question):
         params = self.params 
@@ -312,7 +289,8 @@ class Seq2Seq(BaseModel):
         def _loop_fn(prev, i):
             # prev = tf.matmul(prev, proj_w) + proj_b
             prev_symbol = tf.cond(tf.logical_and(is_training, feed_previous),
-                                  lambda: gumbel_softmax(prev, 1),
+                                  # lambda: gumbel_softmax(prev, 1),
+                                  lambda: tf.argmax(prev, 1),
                                   lambda: tf.argmax(prev, 1))
             chosen_idxs.append(prev_symbol)
             emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
@@ -342,7 +320,8 @@ class Seq2Seq(BaseModel):
         q_logprobs = decoder(True)
 
         last_symbol = tf.cond(tf.logical_and(is_training, feed_previous),
-                              lambda: gumbel_softmax(q_logprobs[-1], 1),
+                              # lambda: gumbel_softmax(q_logprobs[-1], 1),
+                              lambda: tf.argmax(q_logprobs[-1], 1),
                               lambda: tf.argmax(q_logprobs[-1], 1))
         chosen_idxs.append(last_symbol)
         assert len(chosen_idxs) == Q
@@ -350,105 +329,15 @@ class Seq2Seq(BaseModel):
         # q_logprobs = [tf.matmul(out, proj_w) + proj_b for out in q_outputs]
         # return q_outputs
 
-    def DOpt(self):
-        with tf.variable_scope("DOpt") as scope:
-            def learning_rate_decay_fn(lr, global_step):
-                return tf.train.exponential_decay(lr,
-                                                  global_step,
-                                                  decay_steps=5000,
-                                                  decay_rate=0.95,
-                                                  staircase=True)
-            #OPTIMIZER_SUMMARIES = ["learning_rate",
-            #                       "loss"]
-            opt_op = tf.contrib.layers.optimize_loss(self.D_total_loss,
-                                                     self.global_step,
-                                                     learning_rate=self.params.learning_rate * 10,
-                                                     optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn,
-                                                     summaries=OPTIMIZER_SUMMARIES)
-            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
-                tf.add_to_collection("D_SUMM", var)
-            return opt_op, scope.name
-
-    def PreOpt(self):
-        with tf.variable_scope("PreOpt") as scope:
-            def learning_rate_decay_fn(lr, global_step):
-                return tf.train.exponential_decay(lr,
-                                                  global_step,
-                                                  decay_steps=5000,
-                                                  decay_rate=0.95,
-                                                  staircase=True)
-            #OPTIMIZER_SUMMARIES = ["learning_rate",
-            #                       "loss"]
-            opt_op = tf.contrib.layers.optimize_loss(0.5*self.QA_total_loss + 0.5*self.QG_total_loss,
-                                                     self.global_step,
-                                                     learning_rate=self.params.learning_rate,
-                                                     optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=1.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn,
-                                                     summaries=OPTIMIZER_SUMMARIES)
-            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
-                tf.add_to_collection("PRE_SUMM", var)
-            return opt_op, scope.name
-
-    def QAOpt(self):
-        with tf.variable_scope("QAOpt") as scope:
-            def learning_rate_decay_fn(lr, global_step):
-                return tf.train.exponential_decay(lr,
-                                                  global_step,
-                                                  decay_steps=5000,
-                                                  decay_rate=0.95,
-                                                  staircase=True)
-            #OPTIMIZER_SUMMARIES = ["learning_rate",
-            #                       "loss"]
-            opt_op = tf.contrib.layers.optimize_loss(self.QA_total_loss,
-                                                     self.global_step,
-                                                     learning_rate=self.params.learning_rate,
-                                                     optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=5.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn,
-                                                     summaries=OPTIMIZER_SUMMARIES)
-            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
-                tf.add_to_collection("QA_SUMM", var)
-            return opt_op, scope.name
-
-    def RLOpt(self):
-        with tf.variable_scope("RLOpt") as scope:
-            def learning_rate_decay_fn(lr, global_step):
-                return tf.train.exponential_decay(lr,
-                                                  global_step,
-                                                  decay_steps=5000,
-                                                  decay_rate=0.95,
-                                                  staircase=True)
-            #OPTIMIZER_SUMMARIES = ["learning_rate",
-            #                       "loss"]
-            opt_op = tf.contrib.layers.optimize_loss(self.J,
-                                                     self.global_step,
-                                                     learning_rate=self.params.rl_learning_rate,
-                                                     optimizer=tf.train.AdamOptimizer,
-                                                     clip_gradients=1.,
-                                                     learning_rate_decay_fn=learning_rate_decay_fn,
-                                                     summaries=OPTIMIZER_SUMMARIES)
-            for var in tf.get_collection(tf.GraphKeys.SUMMARIES, scope=scope.name):
-                tf.add_to_collection("RL_SUMM", var)
-            return opt_op, scope.name
-
-    def positional_encoding(self, sentence_size, embedding_size):
-        encoding = np.zeros([sentence_size, embedding_size])
-        for l in range(sentence_size):
-            for v in range(embedding_size):
-                encoding[l, v] = (1 - float(l)/sentence_size) - (float(v)/embedding_size)*(1 - 2.0*l/sentence_size)
-        return encoding
-
     def def_run_list(self):
-        self.pre_train_list = [self.merged_PRE, self.Pre_opt_op, self.global_step]
-        self.QA_train_list  = [self.merged_QA, self.QA_opt_op, self.global_step, self.QA_total_loss, self.accuracy]
-        #self.rl_train_list  = [self.merged_RL, self.global_step, self.global_step, self.J]
-        self.rl_train_list  = [self.merged_RL, self.RL_opt_op, self.global_step, self.J]
-        self.pre_test_list  = [self.QA_total_loss, self.QG_total_loss, self.accuracy, self.global_step]
-        self.QA_test_list   = [self.QA_total_loss, self.accuracy, self.global_step]
-        self.rl_test_list   = [self.J, self.QA_total_loss, self.accuracy, self.global_step]
+        self.pre_train_list = [self.merged_QA, self.merged_QG, self.global_step, self.Pre_opt_op]
+        self.QA_train_list  = [self.merged_QA, self.global_step, self.QA_opt_op]
+        self.rl_train_list  = [self.merged_RL, self.global_step, self.RL_opt_op]
+        self.D_train_list   = [self.merged_D, self.global_step, self.D_opt_op]
+
+        self.pre_test_list  = [self.merged_QA, self.merged_QG, self.global_step,
+                               0.5*self.QA_total_loss+0.5*self.QG_total_loss]
+        self.rl_test_list   = [self.merged_QA, self.merged_QG, self.global_step, self.QA_total_loss]
 
     def get_feed_dict(self, batches, feed_previous, is_train):
         return {
