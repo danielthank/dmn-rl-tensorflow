@@ -5,6 +5,12 @@ from tensorflow.contrib.rnn.python.ops.core_rnn_cell_impl import _linear as line
 import numpy as np
 
 
+OPTIMIZER_SUMMARIES = ["learning_rate",
+                       "loss",
+                       "gradients",
+                       "gradient_norm"]
+
+
 def create_opt(scope_name, loss, learning_rate, global_step):
     with tf.variable_scope(scope_name) as scope:
         def learning_rate_decay_fn(lr, global_step):

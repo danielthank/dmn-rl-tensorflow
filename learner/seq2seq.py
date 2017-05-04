@@ -13,10 +13,6 @@ from tf_helper.model_utils import get_sequence_length, positional_encoding
 
 
 EPS = 1e-20
-OPTIMIZER_SUMMARIES = ["learning_rate",
-                       "loss",
-                       "gradients",
-                       "gradient_norm"]
 
 
 class Seq2Seq(BaseModel):
@@ -31,6 +27,7 @@ class Seq2Seq(BaseModel):
         self.batch_size = tf.shape(answer)[0]
         fact_counts = get_sequence_length(input)
         self.is_training = tf.placeholder(tf.bool)
+        self.is_sample = tf.placeholder(tf.bool)
         feed_previous = tf.placeholder(tf.bool)
         story_positional_encoding = positional_encoding(L, V)
         question_positional_encoding = positional_encoding(Q, V)
@@ -285,12 +282,20 @@ class Seq2Seq(BaseModel):
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
         #q_cell = tf.contrib.rnn.MultiRNNCell([q_cell for l in range(num_layers)])
 
+        INIT_EPS = tf.constant(1., dtype='float32')
+        FIN_EPS = tf.constant(0.5, dtype='float32')
+        EXPLORE = tf.constant(500e3, dtype='float32')
+        def getEps(step):
+            float_step = tf.cast(step, 'float32')
+            return tf.cond(float_step > EXPLORE,
+                           lambda: INIT_EPS - (INIT_EPS - FIN_EPS) * float_step / EXPLORE,
+                           lambda: FIN_EPS)
         ## decoder loop function ##
         def _loop_fn(prev, i):
             # prev = tf.matmul(prev, proj_w) + proj_b
-            prev_symbol = tf.cond(tf.logical_and(is_training, feed_previous),
-                                  # lambda: gumbel_softmax(prev, 1),
-                                  lambda: tf.argmax(prev, 1),
+            prev_symbol = tf.cond(self.is_sample,#tf.logical_and(is_training, feed_previous),
+                                  lambda: gumbel_softmax(prev / getEps(self.global_step), 1),
+                                  # lambda: tf.argmax(prev, 1),
                                   lambda: tf.argmax(prev, 1))
             chosen_idxs.append(prev_symbol)
             emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
@@ -319,9 +324,9 @@ class Seq2Seq(BaseModel):
         """
         q_logprobs = decoder(True)
 
-        last_symbol = tf.cond(tf.logical_and(is_training, feed_previous),
-                              # lambda: gumbel_softmax(q_logprobs[-1], 1),
-                              lambda: tf.argmax(q_logprobs[-1], 1),
+        last_symbol = tf.cond(self.is_sample,#tf.logical_and(is_training, feed_previous),
+                              lambda: gumbel_softmax(q_logprobs[-1] / getEps(self.global_step), 1),
+                              # lambda: tf.argmax(q_logprobs[-1], 1),
                               lambda: tf.argmax(q_logprobs[-1], 1))
         chosen_idxs.append(last_symbol)
         assert len(chosen_idxs) == Q
@@ -339,12 +344,13 @@ class Seq2Seq(BaseModel):
                                0.5*self.QA_total_loss+0.5*self.QG_total_loss]
         self.rl_test_list   = [self.merged_QA, self.merged_QG, self.global_step, self.QA_total_loss]
 
-    def get_feed_dict(self, batches, feed_previous, is_train):
+    def get_feed_dict(self, batches, feed_previous, is_train, is_sample):
         return {
             self.x: batches[0],
             self.q: batches[1],
             self.y: batches[2],
             self.is_training: is_train,
+            self.is_sample: is_sample,
             self.feed_previous: feed_previous
         }
 
