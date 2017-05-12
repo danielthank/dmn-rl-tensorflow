@@ -141,6 +141,7 @@ class Seq2Seq(BaseModel):
             act_probs = tf.reduce_prod(tf.reduce_sum(act_probs, axis=2), axis=1) # [N, Q, A] -> [N, Q] -> [N]
             # J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*advantages) + params.seq2seq_weight_decay*tf.add_n(tf.get_collection('l2'))
             J = -1.*tf.reduce_mean(tf.log(act_probs+EPS)*advantages)
+            tf.summary.scalar('J', J, collections=["RL_SUMM"])
 
         # placeholders
         self.x = input
@@ -178,16 +179,22 @@ class Seq2Seq(BaseModel):
 
         # optimizer ops
         if not forward_only:
-            self.RL_opt_op = create_opt('RL_opt', self.J, self.params.rl_learning_rate, self.global_step)
-            self.Pre_opt_op = create_opt('Pre_opt', 0.5*self.QA_total_loss + 0.5*self.QG_total_loss, self.params.learning_rate, self.global_step)
-            self.QA_opt_op = create_opt('QA_opt', self.QA_total_loss, self.params.learning_rate, self.global_step)
-            self.D_opt_op = create_opt('D_opt', self.D_total_loss, self.params.learning_rate*10, self.global_step)
+            rl_l_rate = self.params.rl_learning_rate
+            l_rate = self.params.learning_rate
+            self.RL_opt_op = create_opt('RL_opt', self.J, rl_l_rate, self.RL_global_step, decay_steps=1000, clip=0.5)
+            self.Pre_opt_op = create_opt('Pre_opt',
+                                         0.5*self.QA_total_loss + 0.5*self.QG_total_loss,
+                                         l_rate,
+                                         self.Pre_global_step)
+            self.QA_opt_op = create_opt('QA_opt', self.QA_total_loss, l_rate, self.QA_global_step)
+            self.D_opt_op = create_opt('D_opt', self.D_total_loss, l_rate*10, self.D_global_step)
 
         # merged summary ops
         self.merged_D = tf.summary.merge_all(key='D_SUMM')
         self.merged_QA = tf.summary.merge_all(key='QA_SUMM')
         self.merged_QG = tf.summary.merge_all(key='QG_SUMM')
         self.merged_RL = tf.summary.merge_all(key='RL_SUMM')
+        self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
 
     def Discriminator(self, D_embedding, question):
         params = self.params 
@@ -282,20 +289,21 @@ class Seq2Seq(BaseModel):
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
         #q_cell = tf.contrib.rnn.MultiRNNCell([q_cell for l in range(num_layers)])
 
-        INIT_EPS = tf.constant(1., dtype='float32')
+        INIT_EPS = tf.constant(0.5, dtype='float32')
         FIN_EPS = tf.constant(0.5, dtype='float32')
         EXPLORE = tf.constant(500e3, dtype='float32')
-        def getEps(step):
-            float_step = tf.cast(step, 'float32')
-            return tf.cond(float_step > EXPLORE,
-                           lambda: INIT_EPS - (INIT_EPS - FIN_EPS) * float_step / EXPLORE,
-                           lambda: FIN_EPS)
+        f32_RL_step = tf.cast(self.RL_global_step, 'float32')
+        f32_Pre_step = tf.cast(self.Pre_global_step, 'float32')
+        explore_eps =  tf.case({f32_Pre_step > f32_RL_step: (lambda: INIT_EPS),
+                                EXPLORE <= (f32_RL_step - f32_Pre_step): (lambda: FIN_EPS)},
+                               default=(lambda: INIT_EPS - (INIT_EPS - FIN_EPS) * (f32_RL_step - f32_Pre_step) / EXPLORE),
+                               exclusive=True)
+        tf.summary.scalar("explore_eps", explore_eps, collections=["VAR_SUMM"])
         ## decoder loop function ##
         def _loop_fn(prev, i):
             # prev = tf.matmul(prev, proj_w) + proj_b
             prev_symbol = tf.cond(self.is_sample,#tf.logical_and(is_training, feed_previous),
-                                  lambda: gumbel_softmax(prev / getEps(self.global_step), 1),
-                                  # lambda: tf.argmax(prev, 1),
+                                  lambda: gumbel_softmax(prev / explore_eps, 1),
                                   lambda: tf.argmax(prev, 1))
             chosen_idxs.append(prev_symbol)
             emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
@@ -325,8 +333,7 @@ class Seq2Seq(BaseModel):
         q_logprobs = decoder(True)
 
         last_symbol = tf.cond(self.is_sample,#tf.logical_and(is_training, feed_previous),
-                              lambda: gumbel_softmax(q_logprobs[-1] / getEps(self.global_step), 1),
-                              # lambda: tf.argmax(q_logprobs[-1], 1),
+                              lambda: gumbel_softmax(q_logprobs[-1] / explore_eps, 1),
                               lambda: tf.argmax(q_logprobs[-1], 1))
         chosen_idxs.append(last_symbol)
         assert len(chosen_idxs) == Q
@@ -335,14 +342,14 @@ class Seq2Seq(BaseModel):
         # return q_outputs
 
     def def_run_list(self):
-        self.pre_train_list = [self.merged_QA, self.merged_QG, self.global_step, self.Pre_opt_op]
-        self.QA_train_list  = [self.merged_QA, self.global_step, self.QA_opt_op]
-        self.rl_train_list  = [self.merged_RL, self.global_step, self.RL_opt_op]
-        self.D_train_list   = [self.merged_D, self.global_step, self.D_opt_op]
+        self.pre_train_list = [self.merged_QA, self.merged_QG, self.Pre_global_step, self.Pre_opt_op]
+        self.QA_train_list  = [self.merged_QA, self.QA_global_step, self.QA_opt_op]
+        self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_opt_op]
+        self.D_train_list   = [self.merged_D, self.D_global_step, self.D_opt_op]
 
-        self.pre_test_list  = [self.merged_QA, self.merged_QG, self.global_step,
+        self.pre_test_list  = [self.merged_QA, self.merged_QG, self.Pre_global_step,
                                0.5*self.QA_total_loss+0.5*self.QG_total_loss]
-        self.rl_test_list   = [self.merged_QA, self.merged_QG, self.global_step, self.QA_total_loss]
+        self.rl_test_list   = [self.merged_QA, self.merged_QG, self.QA_global_step, self.QA_total_loss]
 
     def get_feed_dict(self, batches, feed_previous, is_train, is_sample):
         return {
