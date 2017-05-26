@@ -20,6 +20,8 @@ from learner.dmn import DMN as LEARNER_DMN
 from learner.seq2seq import Seq2Seq as LEARNER_Seq2Seq
 from learner.ren import REN as LEARNER_REN
 
+from lm.rnnlm import RNNLM as LM_RNNLM 
+
 from baseline import run_baseline
 
 ## accessible model ##
@@ -28,6 +30,7 @@ MODEL = {'expert_dmn':      EXPERT_DMN,
          'expert_ren':      EXPERT_REN,
          'learner_dmn':     LEARNER_DMN,
          'learner_seq2seq': LEARNER_Seq2Seq,
+         'lm_RNNLM':        LM_RNNLM,
          'learner_ren':     LEARNER_REN}
 
 
@@ -48,6 +51,7 @@ parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren'])
 # directory
 parser.add_argument('--expert_dir', default='')
 parser.add_argument('--load_dir', default='')
+parser.add_argument('--lm_dir', default='')
 
 # training options
 parser.add_argument('--task', default='1', type=str, choices=[str(i) for i in range(1, 21)].append('all'))
@@ -78,6 +82,11 @@ parser.add_argument('--seq2seq_weight_decay', default=0.001, type=float)
 # ren params
 parser.add_argument('--ren_embedding_size', default=100, type=int)
 parser.add_argument('--ren_num_blocks', default=20, type=int)
+
+# RNNLM params
+parser.add_argument('--rnnlm_layers', default=2, type=int)
+parser.add_argument('--rnnlm_hidden_size', default=150, type=int)
+parser.add_argument('--rnnlm_keep_prob', default=1., type=float)
 
 args = parser.parse_args()
 
@@ -122,12 +131,8 @@ def main(_):
         val = train.split_dataset(args.val_ratio)
         print("training count: {}".format(train.count))
         print("testing count: {}".format(test.count))
-        """
-        print("word2idx:", words.word2idx)
-        print("idx2word:", words.idx2word)
-        print("word2dc:", words.word2dc)
-        print("idx2dc:", words.idx2dc)
-        """
+        print("word2idx:", len(words.word2idx))
+        print("idx2word:", len(words.idx2word))
         print("story size: {}".format(args.story_size))
         print("sentence size: {}".format(args.sentence_size))
         print("question size: {}".format(args.question_size))
