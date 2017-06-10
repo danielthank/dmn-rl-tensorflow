@@ -16,18 +16,16 @@ def load_params_dict(filename):
 
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
-    def __init__(self, words, params, *args):
-        ## words ##
-        self.words = words
-
+    def __init__(self, vocab_size, params, *args):
+        self.vocab_size = vocab_size
         ## dirs ##
         self.save_dir = params.save_dir
-        self.load_dir = params.lm_load_dir
+        self.load_dir = params.load_dir
 
         ## set params ##
         self.action = params.action
         self.params = params;
-
+        self.num_steps = params.lm_num_steps
         ## build graph ##
         self.graph = tf.Graph()
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=self.params.gpu_fraction)
@@ -41,9 +39,9 @@ class BaseModel(object):
                 self.new_validation_loss = tf.placeholder('float32', name='new_validation_loss');
                 self.assign_min_validation_loss = self.min_validation_loss.assign(self.new_validation_loss).op
                 if self.action == 'train':
-                    self.build(forward_only=False)
+                    self.build(eval_flag=False)
                 elif self.action == 'test':
-                    self.build(forward_only=True)
+                    self.build(eval_flag=True)
                 self.merged = tf.summary.merge_all()
                 self.init_op = tf.global_variables_initializer()
 
@@ -83,55 +81,46 @@ class BaseModel(object):
         raise NotImplementedError()
 
     def train_batch(self, feed_dict):
-        train_list = [self.merged, self.opt_op, self.global_step]
+        train_list = [self.merged, self.opt_op, self.global_step, self.final_state, self.loss]
         return self.sess.run(train_list, feed_dict=feed_dict)
 
     def test_batch(self, feed_dict):
-        eval_list = [self.total_loss, self.global_step, self.accuracy]
+        eval_list = [self.loss, self.global_step, self.final_state, self.log_perp]
         return self.sess.run(eval_list, feed_dict=feed_dict)
-
-    def output_by_question(self, batch, pred_qs):
-        feed_dict = self.get_feed_dict(batch, is_train=False)
-        feed_dict[self.q] = pred_qs
-        """
-        output_probs = self.sess.run(self.output, feed_dict=feed_dict)
-        assert output_probs.shape == (pred_qs.shape[0], self.words.vocab_size)
-        return output_probs
-        """
-        ans_logits = self.sess.run(self.ans_logits, feed_dict=feed_dict)
-        assert ans_logits.shape == (pred_qs.shape[0], self.words.vocab_size)
-        return ans_logits
 
     def pre_train(self, train_data, val_data):
         assert self.action == 'train'
         params = self.params
-        num_epochs = params.num_epochs
-        num_batches = train_data.get_batch_num(full_batch=False)
+        num_epochs = params.lm_num_epoch
 
         min_loss = self.sess.run(self.min_validation_loss)
         print("Training %d epochs ..." % num_epochs)
         try:
-            for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
-                for _ in range(num_batches):
-                    batch_good = train_data.get_batch_cnt(params.batch_size*4//5)
-                    batch_bad = train_data.get_bad_batch_cnt(params.batch_size - params.batch_size*4//5, self.words.vocab_size)
-                    x = np.concatenate((batch_good[0], batch_bad[0]))
-                    q = np.concatenate((batch_good[1], batch_bad[1]))
-                    y = np.concatenate((batch_good[2], batch_bad[2]))
-                    feed_dict = self.get_feed_dict((x, q, y), is_train=True)
-                    summary, _, global_step = self.train_batch(feed_dict)
-
+            for epoch_no in range(num_epochs):
+                ## training process ##
+                ## fetch initial state ##
+                iters = 0
+                losses = 0.0
+                for step, (x, y) in enumerate(train_data.get_batch()):
+                    if step == 0:
+                        init_feed_dict = {self.x: x}
+                        state = self.sess.run(self.initial_state, feed_dict=init_feed_dict)
+                    feed_dict = self.get_feed_dict((x, y), is_train=True, state=state)
+                    summary, _, global_step, final_state, cur_loss = self.train_batch(feed_dict)
+                    losses += cur_loss
+                    iters += self.num_steps
+                    if step % (train_data.epoch_size // 10) == 10:
+                        print('[%d] perp: %f' % (global_step, np.exp(losses / iters)))
+                    state = final_state
                 self.summary_writer.add_summary(summary, global_step)
-                train_data.reset()
-
-                if (epoch_no + 1) % params.acc_period == 0:
-                    tqdm.write("")  # Newline for TQDM
+                ## evaluation process, including train and val ##
+                if (epoch_no + 1) % params.lm_period == 0:
                     self.eval(train_data, name='Training')
 
-                if (epoch_no + 1) % params.val_period == 0:
+                if (epoch_no + 1) % params.lm_val_period == 0:
                     loss = np.inf
                     if val_data:
-                        loss = self.eval(val_data, name='Validation')
+                        loss , _, _ = self.eval(val_data, name='Validation')
                     if loss <= min_loss:
                         self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
                         min_loss = loss
@@ -141,7 +130,7 @@ class BaseModel(object):
         except KeyboardInterrupt:
             loss = np.inf
             if val_data:
-                loss = self.eval(val_data, name='Validation')
+                loss, _, _ = self.eval(val_data, name='Validation')
             if loss <= min_loss:
                 self.sess.run(self.assign_min_validation_loss, {self.new_validation_loss: loss})
                 min_loss = loss
@@ -150,33 +139,28 @@ class BaseModel(object):
 
 
     def eval(self, data, name):
-        num_batches = data.get_batch_num(full_batch = False)
-        losses = []
-        accs = []
-        for _ in range(num_batches):
-            batch = data.next_batch(full_batch = False)
-            feed_dict = self.get_feed_dict(batch, is_train=False)
-            batch_loss, global_step, batch_acc = self.test_batch(feed_dict)
-            losses.append(batch_loss)
-            accs.append(batch_acc)
-        data.reset()
-        loss = np.mean(losses)
-        acc = np.mean(accs)
-        
-        if name == 'Training':
-            self.train_acc = acc
-        elif name == 'Validation':
-            self.val_acc = acc
-        elif name == 'Test':
-            self.test_acc = acc
-
-        tqdm.write("[%s] step %d, Loss = %.4f, Acc = %.4f" % \
-              (name, global_step, loss, acc))
-        return loss
+        losses = 0.0
+        iters = 0
+        log_perps = []
+        for step, (x, y) in enumerate(data.get_batch()):
+            if step == 0:
+                init_feed_dict = {self.x: x}
+                state = self.sess.run(self.initial_state, feed_dict=init_feed_dict)
+            feed_dict = self.get_feed_dict((x, y), is_train=False, state=state)
+            batch_loss, global_step, state, log_perp = self.test_batch(feed_dict)
+            losses += batch_loss
+            iters += self.num_steps
+            log_perps.append(log_perp)
+        perp = np.exp(losses / iters)
+        #print(np.exp(np.sum(np.array(log_perps).transpose(), axis = 1) / iters))
+        log_perps = np.array(log_perps).transpose()
+        #print("[%s] step %d, Perp = %.4f" % \
+        #      (name, global_step, perp))
+        return perp, log_perps, iters
 
     def save(self):
         assert self.action == 'train'
-        print("Saving model to dir %s" % self.save_dir)
+        print("[lm] Saving model to dir %s" % self.save_dir)
         self.saver.save(self.sess, os.path.join(self.save_dir, 'run'), self.global_step)
 
     def load(self):
@@ -185,80 +169,4 @@ class BaseModel(object):
             print("Error: No saved model found. Please train first.")
             sys.exit(0)
         self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
-
-    def _get_good_output(self, sent):
-        output = ''
-        for token in sent:
-            if token == 0:
-                break
-            output = output + self.words.idx2word[token] + ' '
-        return output.strip()
-
-    def decode(self, data, outputfile, inputfile, all=True):
-        num_batches = data.num_batches
-        for _ in range(num_batches):
-            batch = data.next_batch()
-            feed_dict = self.get_feed_dict(batch, is_train=False)
-            outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            for idx in range(len(batch[0])):
-                print("Content:", file=outputfile)
-                for i, sent in enumerate(batch[0][idx]):
-                    if sent[0] == 0:
-                        break
-                    print(i+1, self._get_good_output(sent), file=outputfile)
-
-                print("Question:", self._get_good_output(batch[1][idx]), file=outputfile)
-                ans = self.words.idx2word[batch[2][idx]]
-                print("Ans: ", ans, file=outputfile)
-                p_ans = self.words.idx2word[np.argmax(outputs[idx])]
-                print("Predict_A:", p_ans, file=outputfile)
-                print(file=outputfile)
-
-            if not all:
-                break
-        data.reset()
-
-        for i, word in enumerate(self.words.idx2word):
-            print(i, word)
-
-        from data_helper.read_data import tokenize
-        while True:
-            story = np.zeros((1, self.params.story_size, self.params.sentence_size), dtype='int32')
-            question = np.zeros((1, self.params.question_size), dtype='int32')
-            answer = np.zeros((1,),  dtype='int32')
-            sentence_cnt = 0;
-            for line in inputfile:
-                tokens = tokenize(line)
-                if '?' in line:
-                    word_cnt = 0
-                    for token in tokens:
-                        if token in self.words.word2idx:
-                            question[0][word_cnt] = self.words.word2idx[token]
-                            word_cnt = word_cnt + 1
-                    break
-
-                word_cnt = 0
-                for token in tokens:
-                    if token in self.words.word2idx:
-                        story[0][sentence_cnt][word_cnt] = self.words.word2idx[token]
-                        word_cnt = word_cnt + 1
-                if word_cnt:
-                    sentence_cnt = sentence_cnt + 1;
-
-            batch = (story, question, answer)
-            print("Content:", file=outputfile)
-            for i, sent in enumerate(batch[0][0]):
-                if sent[0] == 0:
-                    break
-                print(i+1, self._get_good_output(sent), file=outputfile)
-            print("Question:", self._get_good_output(batch[1][0]), file=outputfile)
-            feed_dict = self.get_feed_dict((story, question, answer), is_train=False)
-            #outputs = self.sess.run(self.output, feed_dict=feed_dict)
-            outputs = self.sess.run(self.ans_logits, feed_dict=feed_dict)
-            p_ans = self.words.idx2word[np.argmax(outputs[0])]
-            order = np.argsort(outputs[0])[::-1]
-            print("Predict_A:", file=outputfile)
-            for i in range(5):
-                print(self.words.idx2word[order[i]], outputs[0][order[i]])
-            print(file=outputfile)
 

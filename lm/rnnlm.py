@@ -8,17 +8,16 @@ from functools import partial
 
 from lm.base_model import BaseModel
 from tf_helper.model_utils import get_sequence_length
-from ren_helper.dynamic_memory_cell import DynamicMemoryCell
 
 class RNNLM(BaseModel):
-    def build(self):
+    def build(self, eval_flag):
         params = self.params
-        batch_size, sentence_size, question_size, story_size = params.batch_size, params.sentence_size, params.question_size, params.story_size
-        num_steps = max(sentence_size, question_size, story_size)
+        batch_size = params.batch_size
         keep_prob = params.rnnlm_keep_prob
-        embedding_size, vocab_size = params.ren_embedding_size, self.words.vocab_size
+        vocab_size = self.vocab_size
         num_layers = params.rnnlm_layers
-        hidden_size = params.rnnlm_hidden_size 
+        hidden_size = params.rnnlm_hidden_size
+        num_steps = self.num_steps
 
         # initialize self
         # placeholders
@@ -32,16 +31,12 @@ class RNNLM(BaseModel):
 
         with tf.variable_scope('RNNLM', initializer=normal_initializer):
             # Embeddings
-            # The embedding mask forces the special "pad" embedding to zeros.
-            embedding_params = tf.get_variable('embedding_params', [vocab_size, embedding_size])
-            embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(vocab_size)],
-                dtype=tf.float32,
-                shape=[vocab_size, 1])
-            embedding_params_masked = embedding_params * embedding_mask
+            embedding_params = tf.get_variable('embedding_params', [vocab_size, hidden_size])
 
-            inputs_embedding = tf.nn.embedding_lookup(embedding_params_masked, inputs)
-            if is_training and keep_prob < 1:
-                inputs_embedding = tf.nn.dropout(inputs_embedding, keep_prob)
+            inputs_embedding = tf.nn.embedding_lookup(embedding_params, inputs)
+            inputs_embedding = tf.cond(is_training, 
+                                        lambda: tf.nn.dropout(inputs_embedding, keep_prob),
+                                        lambda: inputs_embedding)
 
             # Recurrence
 
@@ -61,25 +56,23 @@ class RNNLM(BaseModel):
                 else:
                     return tf.contrib.rnn.BasicLSTMCell(
                         hidden_size, forget_bias=0.0, state_is_tuple=True)
-            attn_cell = lstm_cell
-            if is_training and keep_prob < 1:
-                def attn_cell():
-                    return tf.contrib.rnn.DropoutWrapper(
-                    lstm_cell(), output_keep_prob=keep_prob)
+            
             cell = tf.contrib.rnn.MultiRNNCell(
-                [attn_cell() for _ in range(num_layers)], state_is_tuple=True)
+                [lstm_cell() for _ in range(num_layers)], state_is_tuple=True)
 
-            self._initial_state = cell.zero_state(batch_size, 'float32')
+            self.initial_state = cell.zero_state(batch_size, 'float32')
             
             ### RNN ###
             outputs = []
-            state = self._initial_state
+            state = self.initial_state
             with tf.variable_scope('core'):
                 for time_step in range(num_steps):
-                    if time_step > 0:
-                        tf.get_variable_scope().reuse()
-                (cell_output, state) = cell(inputs_embedding[:, time_step, :], state)
-                outputs.append(cell_output)
+                    if time_step > 0:tf.get_variable_scope().reuse_variables()
+                    (cell_output, state) = cell(inputs_embedding[:, time_step, :], state)
+                    cell_output = tf.cond(is_training, 
+                                      lambda: tf.nn.dropout(cell_output, keep_prob),
+                                      lambda: cell_output)
+                    outputs.append(cell_output)
             
             output = tf.reshape(tf.stack(axis=1, values=outputs), [-1, hidden_size]) #[batch_size * num_steps, hidden_size]
             weight_o = tf.get_variable('output_weight', [hidden_size, vocab_size], 'float32')
@@ -89,15 +82,16 @@ class RNNLM(BaseModel):
             loss = tf.contrib.legacy_seq2seq.sequence_loss_by_example(
                     [logits], [tf.reshape(ground_truth, [-1])],
                     [tf.ones([batch_size * num_steps], dtype='float32')])
-            
+            batch_size = tf.cast(batch_size, tf.float32) 
             self.loss = tf.reduce_sum(loss) / batch_size
-
-            if is_training:
+            log_perp = loss
+            self.final_state = state # for recurrent purpose
+            if not eval_flag:
                 def learning_rate_decay_fn(lr, global_step):
                     return tf.train.exponential_decay(lr,
                                                       global_step,
                                                       decay_steps=3000,
-                                                      decay_rate=0.5,
+                                                      decay_rate=0.8,
                                                       staircase=True)
                 OPTIMIZER_SUMMARIES = ["learning_rate",
                                        "loss",
@@ -113,28 +107,31 @@ class RNNLM(BaseModel):
             self.x = inputs
             self.y = ground_truth
             self.is_training = is_training
+            self.log_perp = log_perp #[batch_size, 1]
             self.num_steps = num_steps
             # Output Module
-            if is_training:
+            if not eval_flag:
                 self.opt_op = opt_op
             else:
                 self.opt_op = None
 
 
-    def get_feed_dict(self, batches, is_train):
-        return {
+    def get_feed_dict(self, batches, is_train, state):
+        feed_dict = {
             self.x: batches[0],
             self.y: batches[1],
-            self.is_training: is_train
+            self.is_training: is_train,
         }
-    
+        for i, (c, h) in enumerate(self.initial_state):
+            feed_dict[c] = state[i].c
+            feed_dict[h] = state[i].h
+        return feed_dict
     def save_params(self):
         assert self.action == 'train'
         params = self.params
         filename = os.path.join(self.save_dir, "params.json")
         save_params_dict = {'rnnlm_layers': params.rnnlm_layers,
                             'rnnlm_hidden_size': params.rnnlm_hidden_size,
-                            'num_steps': self.num_steps,
                             'target': params.target,
                             'arch': params.arch,
                             'task': params.task}

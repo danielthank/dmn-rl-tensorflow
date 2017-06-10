@@ -45,8 +45,8 @@ parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
 # Action and target and arch
 parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline'])
-parser.add_argument('target', choices=['expert', 'learner'])
-parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren'])
+parser.add_argument('target', choices=['expert', 'learner', 'lm'])
+parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren', 'RNNLM'])
 
 # directory
 parser.add_argument('--expert_dir', default='')
@@ -85,8 +85,15 @@ parser.add_argument('--ren_num_blocks', default=20, type=int)
 
 # RNNLM params
 parser.add_argument('--rnnlm_layers', default=2, type=int)
-parser.add_argument('--rnnlm_hidden_size', default=150, type=int)
-parser.add_argument('--rnnlm_keep_prob', default=1., type=float)
+parser.add_argument('--rnnlm_hidden_size', default=650, type=int)
+parser.add_argument('--rnnlm_keep_prob', default=0.5, type=float)
+parser.add_argument('--lm_num_epoch', default=35, type=int)
+parser.add_argument('--lm_ptb_path', default='./ptb', type=str)
+parser.add_argument('--lm_num_steps', default=20, type=int)
+parser.add_argument('--lm_batch_size', default=20, type=int)
+parser.add_argument('--lm_vocab_size', default=20, type=int)
+parser.add_argument('--lm_period', default=1, type=int)
+parser.add_argument('--lm_val_period', default=1, type=int)
 
 args = parser.parse_args()
 
@@ -106,6 +113,12 @@ def main(_):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
             os.makedirs(save_dir+'/record', exist_ok=True)
+    elif args.target == 'lm':
+        save_dir = os.path.join('save', '{}_{}'.format(args.target, args.arch))
+        if args.action == "train":
+            if tf.gfile.Exists(save_dir):
+                tf.gfile.DeleteRecursively(save_dir)
+            os.makedirs(save_dir, exist_ok=True)
     else:
         save_dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
     args.save_dir = save_dir
@@ -120,6 +133,13 @@ def main(_):
             task_list = [[int(args.task)]]
         for task in task_list:
             run_baseline(task, args, MainModel)
+    elif args.target == 'lm':
+        if args.action == 'train':
+            from lm.lm_helper import train_lm
+            train_lm(MainModel, args)
+        elif args.action == 'test':
+            from lm.lm_helper import test_lm
+            test_lm(MainModel, args)
     else:
         ## data set ##
         if args.task == 'all':
@@ -169,23 +189,37 @@ def main(_):
                 raise Exception("Need to load an expert from expert_dir to run a learner!")
             expert_params = None
 
+        if not params.lm_dir == '':
+            params_filename = os.path.join(params.lm_dir, 'params.json')
+            load_params = load_params_dict(params_filename)
+            if not load_params['target'] == 'lm':
+                raise Exception("dir contains no language model!")
+            lm_params = params._replace(action='test', 
+                                        load_dir=params.lm_dir,
+                                        lm_num_steps=1,
+                                        lm_batch_size=params.batch_size,
+                                        **load_params)
+        else:
+            if params.target == 'learner':
+                print("No language model used in learner!")
+            lm_params = None
         ## run action ##
         if args.action == 'train':
-            main_model = MainModel(words, params, expert_params)
+            main_model = MainModel(words, params, expert_params, lm_params)
             main_model.pre_train(train, val)
             main_model.save_params()
 
         elif args.action == 'test':
             if args.load_dir == '':
                 raise Exception("Need a trained model to test!")
-            main_model = MainModel(words, params, expert_params)
+            main_model = MainModel(words, params, expert_params, lm_params)
             main_model.decode(test, sys.stdout, sys.stdin, all=False)
             main_model.eval(test, name='Test')
 
         elif args.action == 'rl':
             if not args.target == 'learner':
                 raise Exception("Only learner can run rl action!")
-            main_model = MainModel(words, params, expert_params)
+            main_model = MainModel(words, params, expert_params, lm_params)
             main_model.rl_train(train, val)
             main_model.save_params()
 
