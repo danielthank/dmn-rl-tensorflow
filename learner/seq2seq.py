@@ -344,9 +344,9 @@ class Seq2Seq(BaseModel):
     def def_run_list(self):
         self.pre_train_list = [self.merged_QA, self.merged_QG, self.Pre_global_step, self.Pre_opt_op]
         self.QA_train_list  = [self.merged_QA, self.QA_global_step, self.QA_opt_op]
-        self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_opt_op]
+        #self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_opt_op]
+        self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_global_step]
         self.D_train_list   = [self.merged_D, self.D_global_step, self.D_opt_op]
-
         self.pre_test_list  = [self.merged_QA, self.merged_QG, self.Pre_global_step,
                                0.5*self.QA_total_loss+0.5*self.QG_total_loss]
         self.rl_test_list   = [self.merged_QA, self.merged_QG, self.QA_global_step, self.QA_total_loss]

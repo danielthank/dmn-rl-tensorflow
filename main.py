@@ -21,6 +21,7 @@ from learner.seq2seq import Seq2Seq as LEARNER_Seq2Seq
 from learner.ren import REN as LEARNER_REN
 
 from baseline import run_baseline
+from experiments import run_experiments
 
 ## accessible model ##
 MODEL = {'expert_dmn':      EXPERT_DMN,
@@ -41,7 +42,7 @@ def load_params_dict(filename):
 parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
 # Action and target and arch
-parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline'])
+parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline', 'experiments'])
 parser.add_argument('target', choices=['expert', 'learner'])
 parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren'])
 
@@ -50,7 +51,8 @@ parser.add_argument('--expert_dir', default='')
 parser.add_argument('--load_dir', default='')
 
 # training options
-parser.add_argument('--task', default='1', type=str, choices=[str(i) for i in range(1, 21)].append('all'))
+#parser.add_argument('--task', default='1', type=str, choices=[str(i) for i in range(1, 21)]+['all', 'sweep'])
+parser.add_argument('--task', nargs='+', default=['1'], type=str, choices=[str(i) for i in range(1, 21)]+['all', 'sweep'])
 parser.add_argument('--batch_size', default=256, type=int)
 parser.add_argument('--num_epochs', default=256, type=int)
 parser.add_argument('--learning_rate', default=0.002, type=float)
@@ -97,26 +99,63 @@ def main(_):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
             os.makedirs(save_dir+'/record', exist_ok=True)
+    elif args.action == 'experiments':
+        save_dir = os.path.join('save_experiments', '{}_{}'.format(args.arch, args.task))
     else:
         save_dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
     args.save_dir = save_dir
 
     if args.action == 'baseline':
         args.action = 'train'
+        """
         if args.task == 'all':
             task_list = [list(range(1,21))]
         elif args.task == 'sweep':
-            task_list = [[str(i)] for i in range(1,21)]
+            task_list = [[i] for i in range(1,21)]
         else:
             task_list = [[int(args.task)]]
+        """
+        if 'all' in args.task:
+            task_list = [list(range(1,21))]
+        elif 'sweep' in args.task:
+            task_list = [[i] for i in range(1,21)]
+        else:
+            task_list = [[int(i) for i in args.task]]
         for task in task_list:
             run_baseline(task, args, MainModel)
+    elif args.action == 'experiments':
+        assert args.target == "learner", "Experiments can only run by a learner!"
+        args.action = 'train'
+        """
+        if args.task == 'all':
+            task_list = [list(range(1,21))]
+        elif args.task == 'sweep':
+            task_list = [[i] for i in range(1,21)]
+        else:
+            task_list = [[int(args.task)]]
+        """
+        if 'all' in args.task:
+            task_list = [list(range(1,21))]
+        elif 'sweep' in args.task:
+            task_list = [[i] for i in range(1,21)]
+        else:
+            task_list = [[int(i) for i in args.task]]
+        for task in task_list:
+            run_experiments(task, args, MainModel)
     else:
         ## data set ##
+        """
         if args.task == 'all':
             args.task = list(range(1, 21))
         else:
             args.task = [int(args.task)]
+        """
+        if 'all' in args.task:
+            args.task = list(range(1, 21))
+        elif 'sweep' in args.task:
+            raise Exception("Only action experiments & baseline support task sweep!")
+        else:
+            args.task = [int(i) for i in args.task]
         train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(args.task, args.batch_size,
                                                                                                 args.target=='expert')
         val = train.split_dataset(args.val_ratio)

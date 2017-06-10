@@ -42,6 +42,9 @@ class DataSet:
         self.current_index = to
         return xs, qs, ys
 
+    def get_all(self):
+        return self.xs[self.indexes], self.qs[self.indexes], self.ys[self.indexes]
+
     def get_batch_cnt(self, cnt):
         if not self.has_next_batch(cnt):
             self.reset()
@@ -89,11 +92,12 @@ class DataSet:
         val_set.count = self.count - end_index
         val_set.indexes = list(range(end_index, self.count))
         val_set.num_batches = int(val_set.count / val_set.batch_size)
+        val_set.reset()
         self.count = end_index
         self.setup()
         return val_set
     
-    def get_batch_num(self,full_batch = True):
+    def get_batch_num(self, full_batch = True):
         '''
             use this function is better than access num_batches directly
         '''
@@ -107,7 +111,7 @@ class DataSet:
         if self.shuffle:
             np.random.shuffle(self.indexes)
     
-    def __getitem__(self,key):
+    def __getitem__(self, key):
         
         # do not (deep) copy data - just modify index list!
         val_set = copy.copy(self)
@@ -119,6 +123,7 @@ class DataSet:
             val_set.count = int((stop - start)/step)
             val_set.indexes = [self.indexes[i] for i in range(start,stop,step)]
             val_set.num_batches = int(val_set.count / val_set.batch_size)
+            val_set.reset()
             return val_set
         else:
             raise NotImplementedError
