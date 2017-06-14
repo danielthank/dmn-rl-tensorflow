@@ -293,8 +293,16 @@ class BaseModel(object):
         # tot_QA_acc = []
         indx = np.arange(len(QA_x_mem))
         np.random.shuffle(indx)
+        mem_length = len(QA_x_mem)
+        if num_batch == 'all':
+            num_batch = math.ceil(mem_length/params.batch_size)
+        
         for j in range(num_batch):
-            tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
+            if (j+1)*params.batch_size < mem_length: 
+                tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
+            else:
+                tmp = indx[j * params.batch_size: mem_length]
+
             QA_summ, QA_global_step, _ = self.QA_train_batch((QA_x_mem[tmp],
                                                                          QA_q_mem[tmp],
                                                                          QA_y_mem[tmp]))

@@ -111,12 +111,13 @@ def tokenize_task(stories, word_table):
         story_ids.append((story, query, answer))
     return story_ids
 
-def read_babi(task_ids, batch_size, isexpert):
+def read_babi(task_ids, batch_size, isexpert,word_table=None):
     """ Reads bAbi data set.
     :param task_id: task no. (int)
     :param batch_size: how many examples in a minibatch?
     """
-    word_table = WordTable()
+    if word_table == None:
+        word_table = WordTable()
 
     all_train = []
     all_test = []

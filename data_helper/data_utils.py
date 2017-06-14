@@ -66,6 +66,13 @@ class DataSet:
         qs = qs * (~choose) + np.random.randint(2, vocab_size, size=qs.shape) * choose # do not change to <eos> or <go>
         self.current_index += cnt
         return xs, qs, ys
+    def get_random_cnt(self,cnt):
+        choices = np.random.choice(self.count,cnt)
+        xs = self.xs[choices]
+        qs = self.qs[choices]
+        ys = self.ys[choices]
+        return xs, qs, ys
+
     """
     def has_next_batch(self, full_batch):
         if full_batch:

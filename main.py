@@ -19,16 +19,17 @@ from expert.ren import REN as EXPERT_REN
 from learner.dmn import DMN as LEARNER_DMN
 from learner.seq2seq import Seq2Seq as LEARNER_Seq2Seq
 from learner.ren import REN as LEARNER_REN
-
+from learner.typelearner import TypeSelect as LEARNER_Type
 from baseline import run_baseline
-
+from type_select import run_type_select
 ## accessible model ##
 MODEL = {'expert_dmn':      EXPERT_DMN,
          'expert_seq2seq':  EXPERT_Seq2Seq,
          'expert_ren':      EXPERT_REN,
          'learner_dmn':     LEARNER_DMN,
          'learner_seq2seq': LEARNER_Seq2Seq,
-         'learner_ren':     LEARNER_REN}
+         'learner_ren':     LEARNER_REN,
+         'learner_type':    LEARNER_Type}
 
 
 def load_params_dict(filename):
@@ -41,9 +42,9 @@ def load_params_dict(filename):
 parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
 # Action and target and arch
-parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline'])
+parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline','type_select'])
 parser.add_argument('target', choices=['expert', 'learner'])
-parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren'])
+parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren','type'])
 
 # directory
 parser.add_argument('--expert_dir', default='')
@@ -97,6 +98,13 @@ def main(_):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
             os.makedirs(save_dir+'/record', exist_ok=True)
+    elif args.action == 'type_select':
+        #assert args.task == 'all'
+        save_dir = os.path.join('save_type_select', '{}_{}'.format(args.arch, args.task))
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+        if not os.path.exists(save_dir+'/record'):
+            os.makedirs(save_dir+'/record', exist_ok=True)
     else:
         save_dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
     args.save_dir = save_dir
@@ -111,6 +119,10 @@ def main(_):
             task_list = [[int(args.task)]]
         for task in task_list:
             run_baseline(task, args, MainModel)
+    elif args.action == 'type_select':
+        ## type_select use all task by default
+        args.action = 'train'
+        run_type_select(args,MainModel)
     else:
         ## data set ##
         if args.task == 'all':
