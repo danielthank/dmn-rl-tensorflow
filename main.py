@@ -42,7 +42,7 @@ def load_params_dict(filename):
 parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
 # Action and target and arch
-parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline', 'experiments'])
+parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline', 'experiments_rl', 'experiments_nonrl'])
 parser.add_argument('target', choices=['expert', 'learner'])
 parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren'])
 
@@ -94,27 +94,21 @@ def main(_):
 
     ## create save dir ##
     if args.action == 'baseline':
-        save_dir = os.path.join('save_baseline', '{}_{}'.format(args.arch, args.task))
+        save_dir = os.path.join('save_baseline', '{}_{}'.format(args.arch, '_'.join(args.task)))
         if not os.path.exists(save_dir):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
             os.makedirs(save_dir+'/record', exist_ok=True)
-    elif args.action == 'experiments':
-        save_dir = os.path.join('save_experiments', '{}_{}'.format(args.arch, args.task))
+    elif args.action == 'experiments_rl':
+        save_dir = os.path.join('save_experiments_rl', '{}_{}'.format(args.arch, '_'.join(args.task)))
+    elif args.action == 'experiments_nonrl':
+        save_dir = os.path.join('save_experiments_nonrl', '{}_{}'.format(args.arch, '_'.join(args.task)))
     else:
-        save_dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, args.task))
+        save_dir = os.path.join('save', '{}_{}_{}'.format(args.target, args.arch, '_'.join(args.task)))
     args.save_dir = save_dir
 
     if args.action == 'baseline':
         args.action = 'train'
-        """
-        if args.task == 'all':
-            task_list = [list(range(1,21))]
-        elif args.task == 'sweep':
-            task_list = [[i] for i in range(1,21)]
-        else:
-            task_list = [[int(args.task)]]
-        """
         if 'all' in args.task:
             task_list = [list(range(1,21))]
         elif 'sweep' in args.task:
@@ -123,17 +117,9 @@ def main(_):
             task_list = [[int(i) for i in args.task]]
         for task in task_list:
             run_baseline(task, args, MainModel)
-    elif args.action == 'experiments':
-        assert args.target == "learner", "Experiments can only run by a learner!"
+    elif args.action == 'experiments_rl':
+        assert args.target == "learner", "RL Experiments can only run by a learner!"
         args.action = 'train'
-        """
-        if args.task == 'all':
-            task_list = [list(range(1,21))]
-        elif args.task == 'sweep':
-            task_list = [[i] for i in range(1,21)]
-        else:
-            task_list = [[int(args.task)]]
-        """
         if 'all' in args.task:
             task_list = [list(range(1,21))]
         elif 'sweep' in args.task:
@@ -141,15 +127,20 @@ def main(_):
         else:
             task_list = [[int(i) for i in args.task]]
         for task in task_list:
-            run_experiments(task, args, MainModel)
+            run_experiments(task, args, MainModel, RL=True)
+    elif args.action == 'experiments_nonrl':
+        assert args.target == "learner", "Non RL Experiments can only run by a learner!"
+        args.action = 'train'
+        if 'all' in args.task:
+            task_list = [list(range(1,21))]
+        elif 'sweep' in args.task:
+            task_list = [[i] for i in range(1,21)]
+        else:
+            task_list = [[int(i) for i in args.task]]
+        for task in task_list:
+            run_experiments(task, args, MainModel, RL=False)
     else:
         ## data set ##
-        """
-        if args.task == 'all':
-            args.task = list(range(1, 21))
-        else:
-            args.task = [int(args.task)]
-        """
         if 'all' in args.task:
             args.task = list(range(1, 21))
         elif 'sweep' in args.task:

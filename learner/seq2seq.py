@@ -35,7 +35,7 @@ class Seq2Seq(BaseModel):
 
         D_labels = tf.placeholder('bool', shape=[None], name='D_labels')
 
-        with tf.variable_scope('QA', initializer=tf.contrib.layers.xavier_initializer()):
+        with tf.variable_scope('QA', initializer=tf.contrib.layers.xavier_initializer()) as QA_scope:
             qa_embedding = tf.get_variable('qa_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
             qa_embedding = qa_embedding * embedding_mask
             with tf.variable_scope('SentenceReader'):
@@ -44,8 +44,11 @@ class Seq2Seq(BaseModel):
                 qa_story = story_positional_encoding * qa_story
                 qa_story = tf.reduce_sum(qa_story, 2)  # [batch, story, embedding_size]
                 qa_story = dropout(qa_story, 0.5, self.is_training)
-                (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(rnn.LSTMCell(V),
-                                                                                       rnn.LSTMCell(V),
+                num_layers = 2
+                q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
+                                                                                       q_cell_bw,
                                                                                        qa_story,
                                                                                        sequence_length=fact_counts,
                                                                                        dtype=tf.float32)
@@ -58,7 +61,7 @@ class Seq2Seq(BaseModel):
 
             QA_ans_logits = self.QA_branch(qa_embedding, qa_q, qa_story)
             QA_ans = tf.nn.softmax(QA_ans_logits)
-            #variables = [v for v in tf.trainable_variables() if v.name.startswith(scope.name)]
+            QA_vars = [v for v in tf.trainable_variables() if v.name.startswith(QA_scope.name)]
             #variable_summary(variables)
             with tf.name_scope('Loss'):
                 # Cross-Entropy loss
@@ -84,8 +87,11 @@ class Seq2Seq(BaseModel):
                 qg_story = story_positional_encoding * qg_story
                 qg_story = tf.reduce_sum(qg_story, 2)  # [batch, story, embedding_size]
                 qg_story = dropout(qg_story, 0.5, self.is_training)
-                (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(rnn.LSTMCell(V),
-                                                                                       rnn.LSTMCell(V),
+                num_layers = 2
+                q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
+                                                                                       q_cell_bw,
                                                                                        qg_story,
                                                                                        sequence_length=fact_counts,
                                                                                        dtype=tf.float32)
@@ -160,6 +166,7 @@ class Seq2Seq(BaseModel):
         # QA output tensors
         self.QA_ans_logits = QA_ans_logits
         self.QA_ans = QA_ans
+        self.QA_init_op = tf.variables_initializer(var_list=QA_vars, name="QA_init_op")
         self.QA_total_loss = QA_total_loss
         self.num_corrects = num_corrects
         self.QA_accuracy = QA_accuracy
@@ -181,12 +188,13 @@ class Seq2Seq(BaseModel):
         if not forward_only:
             rl_l_rate = self.params.rl_learning_rate
             l_rate = self.params.learning_rate
-            self.RL_opt_op = create_opt('RL_opt', self.J, rl_l_rate, self.RL_global_step, decay_steps=1000, clip=0.5)
+            self.RL_opt_op = create_opt('RL_opt', self.J, rl_l_rate, self.RL_global_step, decay_steps=5000, clip=0.2)
             self.Pre_opt_op = create_opt('Pre_opt',
                                          0.5*self.QA_total_loss + 0.5*self.QG_total_loss,
                                          l_rate,
                                          self.Pre_global_step)
             self.QA_opt_op = create_opt('QA_opt', self.QA_total_loss, l_rate, self.QA_global_step)
+            self.reQA_opt_op = create_opt('reQA_opt', self.QA_total_loss, l_rate, self.reQA_global_step)
             self.D_opt_op = create_opt('D_opt', self.D_total_loss, l_rate*10, self.D_global_step)
 
         # merged summary ops
@@ -250,14 +258,18 @@ class Seq2Seq(BaseModel):
         # attention mechanism
         #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
-        #q_cell = tf.contrib.rnn.MultiRNNCell([q_cell for l in range(num_layers)])
+        num_layers = 1
+        #q_cell = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(params.seq2seq_hidden_size) for l in range(num_layers)])
         go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
         go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         decoder_inputs = tf.unstack(go_pad, axis=1) # 1 * [N, V]
 
+        initial_state = (qa_q, qa_q)
+        #initial_state = [(qa_q, qa_q) for l in range(num_layers)]
+        attention_states = qa_story
         q_logprobs, _ = tf.contrib.legacy_seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
-                                                                    initial_state=(qa_q, qa_q),
-                                                                    attention_states=qa_story,
+                                                                    initial_state=initial_state,
+                                                                    attention_states=attention_states,
                                                                     cell=q_cell,
                                                                     output_size=self.words.vocab_size,
                                                                     loop_function=None)
@@ -287,14 +299,16 @@ class Seq2Seq(BaseModel):
         ## question module rnn cell ##
         #q_cell = rnn.GRUCell(params.seq2seq_hidden_size)
         q_cell = rnn.LSTMCell(params.seq2seq_hidden_size)
-        #q_cell = tf.contrib.rnn.MultiRNNCell([q_cell for l in range(num_layers)])
+        num_layers = 1
+        #q_cell = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(params.seq2seq_hidden_size) for l in range(num_layers)])
 
-        INIT_EPS = tf.constant(0.5, dtype='float32')
-        FIN_EPS = tf.constant(0.5, dtype='float32')
-        EXPLORE = tf.constant(500e3, dtype='float32')
+        PRE_EPS = tf.constant(0.5, dtype='float32')
+        INIT_EPS = tf.constant(0.01, dtype='float32')
+        FIN_EPS = tf.constant(0.01, dtype='float32')
+        EXPLORE = tf.constant(25e3, dtype='float32')
         f32_RL_step = tf.cast(self.RL_global_step, 'float32')
         f32_Pre_step = tf.cast(self.Pre_global_step, 'float32')
-        explore_eps =  tf.case({f32_Pre_step > f32_RL_step: (lambda: INIT_EPS),
+        explore_eps =  tf.case({f32_Pre_step > f32_RL_step: (lambda: PRE_EPS),
                                 EXPLORE <= (f32_RL_step - f32_Pre_step): (lambda: FIN_EPS)},
                                default=(lambda: INIT_EPS - (INIT_EPS - FIN_EPS) * (f32_RL_step - f32_Pre_step) / EXPLORE),
                                exclusive=True)
@@ -303,7 +317,7 @@ class Seq2Seq(BaseModel):
         def _loop_fn(prev, i):
             # prev = tf.matmul(prev, proj_w) + proj_b
             prev_symbol = tf.cond(self.is_sample,#tf.logical_and(is_training, feed_previous),
-                                  lambda: gumbel_softmax(prev / explore_eps, 1),
+                                  lambda: tf.argmax(prev, 1),#gumbel_softmax(prev / explore_eps, 1),
                                   lambda: tf.argmax(prev, 1))
             chosen_idxs.append(prev_symbol)
             emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
@@ -316,9 +330,12 @@ class Seq2Seq(BaseModel):
             loop_function = _loop_fn if feed_previous_bool else None
             reuse = None if feed_previous_bool else True
             with tf.variable_scope(tf.get_variable_scope(), reuse=reuse):
+                initial_state = (qg_story[:, -1], qg_story[:, -1])
+                #initial_state = [(qg_story[:, -1], qg_story[:, -1]) for l in range(num_layers)]
+                attention_states = qg_story
                 q_logprobs, _ = tf.contrib.legacy_seq2seq.attention_decoder(decoder_inputs=decoder_inputs,
-                                                                            initial_state=(qg_story[:, -1], qg_story[:, -1]),
-                                                                            attention_states=qg_story,
+                                                                            initial_state=initial_state,
+                                                                            attention_states=attention_states,
                                                                             cell=q_cell,
                                                                             output_size=self.words.vocab_size,
                                                                             loop_function=loop_function)
@@ -333,7 +350,7 @@ class Seq2Seq(BaseModel):
         q_logprobs = decoder(True)
 
         last_symbol = tf.cond(self.is_sample,#tf.logical_and(is_training, feed_previous),
-                              lambda: gumbel_softmax(q_logprobs[-1] / explore_eps, 1),
+                              lambda: tf.argmax(q_logprobs[-1], 1),#gumbel_softmax(q_logprobs[-1] / explore_eps, 1),
                               lambda: tf.argmax(q_logprobs[-1], 1))
         chosen_idxs.append(last_symbol)
         assert len(chosen_idxs) == Q
@@ -344,12 +361,15 @@ class Seq2Seq(BaseModel):
     def def_run_list(self):
         self.pre_train_list = [self.merged_QA, self.merged_QG, self.Pre_global_step, self.Pre_opt_op]
         self.QA_train_list  = [self.merged_QA, self.QA_global_step, self.QA_opt_op]
-        #self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_opt_op]
-        self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_global_step]
+        self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_opt_op]
+        #self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_global_step]
         self.D_train_list   = [self.merged_D, self.D_global_step, self.D_opt_op]
         self.pre_test_list  = [self.merged_QA, self.merged_QG, self.Pre_global_step,
                                0.5*self.QA_total_loss+0.5*self.QG_total_loss]
-        self.rl_test_list   = [self.merged_QA, self.merged_QG, self.QA_global_step, self.QA_total_loss]
+        self.rl_test_list   = [self.merged_QA, self.merged_QG, self.QA_global_step, self.RL_global_step, self.QG_total_loss]
+
+        self.reQA_train_list  = [self.merged_QA, self.reQA_global_step+self.QA_global_step+1000, self.reQA_opt_op]
+        self.QA_test_list   = [self.merged_QA, self.reQA_global_step+self.QA_global_step+1000, self.QA_total_loss, self.QA_accuracy]
 
     def get_feed_dict(self, batches, feed_previous, is_train, is_sample):
         return {

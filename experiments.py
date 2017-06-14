@@ -11,7 +11,7 @@ def load_params_dict(filename):
     return params_dict
 
 
-def run_experiments(task, args, MainModel):
+def run_experiments(task, args, MainModel, RL):
     ## data set ##
     args.task = task
     train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(task, args.batch_size, False)
@@ -48,7 +48,7 @@ def run_experiments(task, args, MainModel):
     
     #record = np.array(['training sample','train acc','val acc','test acc'])
     #record = np.expand_dims(record, axis=0)
-    num_sample = min(train.count, 256*10)
+    num_sample = min(train.count, 256*10*len(task))
     train = train[:num_sample]
     print("train_num:", train.count)
     for pre_ratio in np.array(range(10, 100, 10))/100.:
@@ -63,9 +63,9 @@ def run_experiments(task, args, MainModel):
         ## run action ##
         main_model = MainModel(words, learner_params, expert_params)
         main_model.pre_train(pretrain_data, val, pretrain_data)
-        main_model.rl_train(rltrain_data, val, pretrain_data, Q_limit=num_sample)
-        print("Pre-Training on 100 samples")
-        #main_model.save_params()
+        if RL:
+            main_model.rl_train(rltrain_data, val, pretrain_data, Q_limit=num_sample)
+        val_loss, val_acc = main_model.QA_retrain(rltrain_data, val, pretrain_data, Q_limit=num_sample)
 
         #tmp[1] = main_model.train_acc
         #tmp[2] = main_model.val_acc
@@ -78,5 +78,5 @@ def run_experiments(task, args, MainModel):
     else :
         output_path = save_dir + '/record/%s.csv' % task[0]
     np.savetxt(output_path,record,fmt ='%s,%s,%s,%s' )
-    """
     print ('save record to ',output_path)
+    """
