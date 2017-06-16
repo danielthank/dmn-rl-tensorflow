@@ -53,6 +53,7 @@ class BaseModel(object):
         ## dirs ##
         self.save_dir = params.save_dir
         self.load_dir = params.load_dir
+        """
         if params.action == 'train':
             self.summary_dir = os.path.join(self.save_dir, 'pretrain_summary')
             self.validation_summary_dir = os.path.join(self.save_dir, 'pretrain_validation_summary')
@@ -61,6 +62,7 @@ class BaseModel(object):
             self.summary_dir = os.path.join(self.save_dir, 'RL_summary')
             self.validation_summary_dir = os.path.join(self.save_dir, 'RL_validation_summary')
             self.var_summary_dir = os.path.join(self.save_dir, 'RL_var_summary')
+        """
 
         ## set params ##
         self.action = params.action
@@ -76,6 +78,7 @@ class BaseModel(object):
             self.D_global_step = tf.Variable(0, name='D_global_step', trainable=False)
             self.Pre_global_step = tf.Variable(0, name='Pre_global_step', trainable=False)
             self.QA_global_step = tf.Variable(0, name='QA_global_step', trainable=False)
+            self.reQA_global_step = tf.Variable(0, name='reQA_global_step', trainable=False)
             self.RL_global_step = tf.Variable(0, name='RL_global_step', trainable=False)
             ## validation loss ##
             self.min_validation_loss = tf.Variable(np.inf, name='validation_loss', trainable=False)
@@ -100,11 +103,32 @@ class BaseModel(object):
             self.sess.run(self.init_op)
 
         ## summary writer##
+        """
         if not self.action == 'test':
             self.summary_writer = tf.summary.FileWriter(logdir=self.summary_dir, graph=self.sess.graph)
             self.validation_summary_writer = tf.summary.FileWriter(logdir=self.validation_summary_dir,
                                                                    graph=self.sess.graph)
             self.var_summary_writer = tf.summary.FileWriter(logdir=self.var_summary_dir, graph=self.sess.graph)
+        """
+        if not self.action == 'test':
+            self.summary_writers = {"pretrain": [], "RL": []}
+
+            summary_dir = os.path.join(self.save_dir, 'pretrain_summary')
+            validation_summary_dir = os.path.join(self.save_dir, 'pretrain_validation_summary')
+            var_summary_dir = os.path.join(self.save_dir, 'pretrain_var_summary')
+            self.summary_writers["pretrain"].append(tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph))
+            self.summary_writers["pretrain"].append(tf.summary.FileWriter(logdir=validation_summary_dir,
+                                                                          graph=self.sess.graph))
+            self.summary_writers["pretrain"].append(tf.summary.FileWriter(logdir=var_summary_dir,
+                                                                          graph=self.sess.graph))
+            summary_dir = os.path.join(self.save_dir, 'RL_summary')
+            validation_summary_dir = os.path.join(self.save_dir, 'RL_validation_summary')
+            var_summary_dir = os.path.join(self.save_dir, 'RL_var_summary')
+            self.summary_writers["RL"].append(tf.summary.FileWriter(logdir=summary_dir, graph=self.sess.graph))
+            self.summary_writers["RL"].append(tf.summary.FileWriter(logdir=validation_summary_dir,
+                                                                          graph=self.sess.graph))
+            self.summary_writers["RL"].append(tf.summary.FileWriter(logdir=var_summary_dir,
+                                                                          graph=self.sess.graph))
 
         ## load expert ##
         assert not expert_params == None
@@ -127,6 +151,11 @@ class BaseModel(object):
     def __del__(self):
         if hasattr(self, "sess"):
             self.sess.close()
+
+    def set_summary_writers(self, action):
+        self.summary_writer = self.summary_writers[action][0]
+        self.validation_summary_writer = self.summary_writers[action][1]
+        self.var_summary_writer = self.summary_writers[action][2]
 
     def build(self):
         raise NotImplementedError()
@@ -160,9 +189,10 @@ class BaseModel(object):
         #CQ_rewards = self.CQ_reward(batch[0], pred_qs)
 
         if not is_discriminator:
-            tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 1.*discriminator_probs
+            #tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 1.*discriminator_probs
+            tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp*0.1
         else:
-            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards# + (-1.)*discriminator_probs
+            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
 
         return tot_rewards, expert_anses, discriminator_probs, perp
 
@@ -175,10 +205,13 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=True, is_sample=False)
         return self.sess.run(self.pre_train_list, feed_dict=feed_dict)
 
-    def QA_train_batch(self, batch):
+    def QA_train_batch(self, batch, re):
         #QA_train_list = [self.merged_QA, self.QA_opt_op, self.QA_global_step, self.QA_total_loss, self.accuracy]
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True, is_sample=True)
-        return self.sess.run(self.QA_train_list, feed_dict=feed_dict)
+        if re:
+            return self.sess.run(self.reQA_train_list, feed_dict=feed_dict)
+        else:
+            return self.sess.run(self.QA_train_list, feed_dict=feed_dict)
 
     def rl_train_batch(self, batch):
         A = self.words.vocab_size
@@ -228,6 +261,10 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=False)
         return self.sess.run(self.rl_test_list, feed_dict=feed_dict)
 
+    def QA_test_batch(self, batch):
+        feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=False)
+        return self.sess.run(self.QA_test_list, feed_dict=feed_dict)
+
     def D_train(self, t_q_mem, f_q_mem):
         params = self.params
         batch_size = params.batch_size
@@ -253,52 +290,66 @@ class BaseModel(object):
         # return D_summ, D_global_step, np.mean(tot_D_loss), np.mean(tot_D_acc)
         return D_summ, D_global_step
 
-    def pre_train(self, train_data, val_data):
+    def pre_train(self, train_data, val_data, pretrain_data=None):
         params = self.params
         assert not self.action == 'test'
+        self.set_summary_writers("pretrain")
         num_epochs = params.num_epochs
-        num_batches = train_data.num_batches
+        batch_size = params.batch_size
+        #num_batches = train_data.num_batches
 
         ## discriminator question buffer
         f_q_mem = QuestionMemory((params.question_size,), int(1e6), dtype='int32')
         t_q_mem = QuestionMemory((params.question_size,), int(1e6), dtype='int32')
 
-        print("Pre-Training on 100 samples")
-        batch = train_data.get_batch_cnt(512)
-        t_q_mem.append(np.array(batch[1]))
+        if not pretrain_data is None:
+            train_data = pretrain_data
+        else:
+            #batch = train_data.get_batch_cnt(512)
+            train_data = train_data[:512]
+        num_batches = train_data.num_batches
+        print("Pre-Training on %d samples" % train_data.count)
+        #t_q_mem.append(np.array(batch[1]))
+        t_q_mem.append(train_data.get_all()[1])
         try:
             for epoch_no in range(num_epochs):
-                QA_summ, QG_summ, Pre_global_step, _ = self.pre_train_batch(batch)
-                feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=True)
-                pred_qs = self.get_question(feed_dict)
-                rewards, expert_anses, d, perp = self.get_rewards(batch, pred_qs, is_discriminator=True)
-                print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0], 'perp:', perp[0] if perp is not None else 'None')
-                print("push %d bad  questions to mem of size %d" % (len(pred_qs[rewards < 1.5]), len(f_q_mem)))
-                print("push %d good questions to mem of size %d" % (len(pred_qs[rewards > 4.5]), len(t_q_mem)))
-                f_q_mem.append(pred_qs[rewards < 1.5])
-                t_q_mem.append(pred_qs[rewards > 4.5])
-                for ep_j in range(1):
-                    D_summ, D_global_step = self.D_train(t_q_mem, f_q_mem)
-                    # if ep_j%1 == 0:
-                        # print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
-                var_summ = self.sess.run(self.merged_VAR)
-                # print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, QA_ACC = {:.4f}".format(epoch_no, num_epochs, Pre_global_step, QA_loss, QG_loss, QA_acc))
-                # print()
-                self.summary_writer.add_summary(D_summ, D_global_step)
-                self.summary_writer.add_summary(QA_summ, Pre_global_step)
-                self.summary_writer.add_summary(QG_summ, Pre_global_step)
+                for i in range(num_batches):
+                    batch = train_data.next_batch()
+                    QA_summ, QG_summ, Pre_global_step, _ = self.pre_train_batch(batch)
+                    feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=True)
+                    pred_qs = self.get_question(feed_dict)
+                    rewards, expert_anses, d, perp = self.get_rewards(batch, pred_qs, is_discriminator=True)
+                    if i == 0:
+                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0], 'perp:', perp[0] if perp is not None else 'None')
+                        #print("bad Predict_Q: ", self.q2string(pred_qs[rewards < 1.5][0]), 'Rewards:', rewards[rewards < 1.5][0], 'D:', d[rewards < 1.5][0])
+                        #print("push %d bad  questions to mem of size %d" % (len(pred_qs[rewards < 1.5]), len(f_q_mem)))
+                        #print("push %d good questions to mem of size %d" % (len(pred_qs[rewards > 4.5]), len(t_q_mem)))
+                    #f_q_mem.append(pred_qs[rewards < 1.5])
+                    #t_q_mem.append(pred_qs[rewards > 4.5])
+                    #for ep_j in range(1):
+                        #D_summ, D_global_step = self.D_train(t_q_mem, f_q_mem)
+                        # if ep_j%1 == 0:
+                            # print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
+                    var_summ = self.sess.run(self.merged_VAR)
+                    # print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, QA_ACC = {:.4f}".format(epoch_no, num_epochs, Pre_global_step, QA_loss, QG_loss, QA_acc))
+                    # print()
+                    #self.summary_writer.add_summary(D_summ, D_global_step)
+                    self.summary_writer.add_summary(QA_summ, Pre_global_step)
+                    self.summary_writer.add_summary(QG_summ, Pre_global_step)
                 self.var_summary_writer.add_summary(var_summ, Pre_global_step)
+                train_data.reset()
                 if (epoch_no + 1) % params.acc_period == 0:
                     if val_data:
                         val_loss = self.eval(val_data, name='pre')
         except KeyboardInterrupt:
+            train_data.reset()
             print("Stop the training by console!")
         self.sess.run(tf.assign(self.RL_global_step, self.Pre_global_step))
         self.sess.run(tf.assign(self.QA_global_step, self.Pre_global_step))
         self.save(self.Pre_global_step)
         print('complete')
 
-    def QA_train(self, QA_x_mem, QA_q_mem, QA_y_mem, num_batch):
+    def QA_train(self, QA_x_mem, QA_q_mem, QA_y_mem, num_batch, re=False):
         params = self.params
         # tot_QA_loss = []
         # tot_QA_acc = []
@@ -307,22 +358,32 @@ class BaseModel(object):
         for j in range(num_batch):
             tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
             QA_summ, QA_global_step, _ = self.QA_train_batch((QA_x_mem[tmp],
-                                                                         QA_q_mem[tmp],
-                                                                         QA_y_mem[tmp]))
+                                                              QA_q_mem[tmp],
+                                                              QA_y_mem[tmp]),
+                                                             re)
+            self.summary_writer.add_summary(QA_summ, QA_global_step)
             # tot_QA_loss.append(QA_loss)
             # tot_QA_acc.append(acc)
         # return QA_summ, QA_global_step, tot_QA_loss, tot_QA_acc
-        return QA_summ, QA_global_step
+        # return QA_summ, QA_global_step
+        return QA_global_step
 
-    def rl_train(self, train_data, val_data):
+    def rl_train(self, train_data, val_data, pretrain_data=None, Q_limit=np.inf):
         params = self.params
         assert not self.action == 'test'
+        self.set_summary_writers("RL")
         num_epochs = params.num_epochs
         num_batches = train_data.num_batches
+
         memory_size = 10000
         QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), memory_size, dtype='int32')
         QA_q_mem = QuestionMemory((params.question_size,), memory_size, dtype='int32')
         QA_y_mem = QuestionMemory((), memory_size, dtype='int32')
+        if not pretrain_data is None:
+            pre_xs, pre_qs, pre_ys = pretrain_data.get_all()
+            QA_x_mem.append(pre_xs)
+            QA_q_mem.append(pre_qs)
+            QA_y_mem.append(pre_ys)
 
         min_val_loss = self.sess.run(self.min_validation_loss)
         print("RL Training %d epochs ..." % num_epochs)
@@ -330,11 +391,11 @@ class BaseModel(object):
             for epoch_no in range(num_epochs):
                 r = []
                 # tot_J = []
-
+                """
                 QA_x_mem.reset()
                 QA_q_mem.reset()
                 QA_y_mem.reset()
-
+                """
                 # tot_QA_loss = [0.]
                 # tot_QA_acc = [0.]
                 for i in range(num_batches):
@@ -344,20 +405,22 @@ class BaseModel(object):
                     mean_r = np.mean(r_all)
                     if i == 0:
                         text = "Content:\n" + self.content2string(batch[0][0])
-                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' D: '+str(d[0])
+                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Adv: ' + str(r_all[0] - self.baseline) + ' D: '+str(d[0])
                         print(text)
                         print()
                     r.append(mean_r)
                     # tot_J.append(J)
-                    QA_x_mem.append(batch[0])
-                    QA_q_mem.append(pred_qs)
-                    QA_y_mem.append(expert_anses)
+                    if len(QA_q_mem) < Q_limit:
+                        QA_x_mem.append(batch[0])
+                        QA_q_mem.append(pred_qs)
+                        QA_y_mem.append(expert_anses)
+                        print("push %d questions to mem of size %d" % (len(pred_qs), len(QA_q_mem)))
                     if len(QA_x_mem) >= params.batch_size * 2 and not self.merged_QA == None:
-                        QA_summ, QA_global_step = self.QA_train(QA_x_mem,
-                                                             QA_q_mem,
-                                                             QA_y_mem,
-                                                             num_batch=2)
-                        self.summary_writer.add_summary(QA_summ, QA_global_step)
+                    #if not self.merged_QA == None:
+                        self.QA_train(QA_x_mem,
+                                      QA_q_mem,
+                                      QA_y_mem,
+                                      num_batch=2)#len(QA_x_mem)//params.batch_size)
                         # tot_QA_loss += QA_loss
                         # tot_QA_acc += acc
                 self.baseline = 0.9*self.baseline + 0.1*np.mean(r) if not self.baseline == 0. else np.mean(r)
@@ -383,6 +446,7 @@ class BaseModel(object):
             print("Training completed.")
 
         except KeyboardInterrupt:
+            train_data.reset()
             print("Stop the training by console!")
         val_loss = np.inf
         if val_data:
@@ -393,32 +457,95 @@ class BaseModel(object):
             #self.save()
         self.save(self.RL_global_step)
 
+    def QA_retrain(self, train_data, val_data, pretrain_data=None, Q_limit=np.inf):
+        params = self.params
+        assert not self.action == 'test'
+        self.set_summary_writers("RL")
+        num_epochs = params.num_epochs
+        num_batches = train_data.num_batches
+
+        memory_size = 10000
+        QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), memory_size, dtype='int32')
+        QA_q_mem = QuestionMemory((params.question_size,), memory_size, dtype='int32')
+        QA_y_mem = QuestionMemory((), memory_size, dtype='int32')
+        if not pretrain_data is None:
+            pre_xs, pre_qs, pre_ys = pretrain_data.get_all()
+            QA_x_mem.append(pre_xs)
+            QA_q_mem.append(pre_qs)
+            QA_y_mem.append(pre_ys)
+
+        print("QA re-initialize...")
+        self.sess.run(self.QA_init_op)
+        print("Generate QAs...")
+        for i in range(num_batches):
+            batch = train_data.next_batch()
+            feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True, is_sample=True)
+            pred_qs = self.get_question(feed_dict)
+            r_all, expert_anses, d = self.get_rewards(batch, pred_qs)
+            if i % 1 == 0:
+                text = "Content:\n" + self.content2string(batch[0][0])
+                text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' D: '+str(d[0])
+                print(text)
+                print()
+            QA_x_mem.append(batch[0])
+            QA_q_mem.append(pred_qs)
+            QA_y_mem.append(expert_anses)
+            print("push %d questions to mem of size %d" % (len(pred_qs), len(QA_q_mem)))
+        train_data.reset()
+        assert len(QA_q_mem) <= Q_limit
+        print("QA Re-Training %d epochs ..." % num_epochs)
+        try:
+            MA_ratio = 0.6
+            MA_val_loss = 0.
+            MA_val_acc = 0.
+            for epoch_no in range(num_epochs):
+                QA_global_step = self.QA_train(QA_x_mem,
+                                               QA_q_mem,
+                                               QA_y_mem,
+                                               num_batch=len(QA_q_mem)//params.batch_size,
+                                               re=True)
+                var_summ = self.sess.run(self.merged_VAR)
+                self.var_summary_writer.add_summary(var_summ, QA_global_step)
+                if (epoch_no + 1) % params.val_period == 0:
+                    if val_data:
+                        val_loss, val_acc = self.eval(val_data, name='QA')
+                        MA_val_loss = MA_ratio*MA_val_loss + (1-MA_ratio)*val_loss if not MA_val_loss == 0. else val_loss
+                        MA_val_acc = MA_ratio*MA_val_acc + (1-MA_ratio)*val_acc if not MA_val_acc == 0. else val_acc
+                        print("[Training {}/{} step {}] QA_Loss = {:.4f} QA_ACC = {:.4f}".format(epoch_no, num_epochs, QA_global_step, MA_val_loss, MA_val_acc))
+            print("Re-Training completed.")
+        except KeyboardInterrupt:
+            print("Stop the re-training by console!")
+        if val_data:
+            val_loss, val_acc = self.eval(val_data, name='QA')
+            MA_val_loss = MA_ratio*MA_val_loss + (1-MA_ratio)*val_loss if not MA_val_loss == 0. else val_loss
+            MA_val_acc = MA_ratio*MA_val_acc + (1-MA_ratio)*val_acc if not MA_val_acc == 0. else val_acc
+            print("[Training {}/{} step {}] QA_Loss = {:.4f} QA_ACC = {:.4f}".format(epoch_no, num_epochs, QA_global_step, MA_val_loss, MA_val_acc))
+            return val_loss, val_acc
+        return
+
     def eval(self, data, name):
         num_batches = data.num_batches
-        # tot_J = []
         tot_loss = []
-        # tot_QA_acc = []
-        # r = []
+        tot_QA_acc = []
         for _ in range(num_batches):
             batch = data.next_batch()
             if name == 'pre':
-                QA_summ, QG_summ, global_step, loss = self.pre_test_batch(batch)
+                QA_summ, QG_summ, pre_global_step, loss = self.pre_test_batch(batch)
+                QA_global_step = pre_global_step
+                global_step = pre_global_step
             elif name == 'rl':
-                QA_summ, QG_summ, global_step, loss = self.rl_test_batch(batch)
-            # tot_J.append(J)
-            # r.append(mean_r)
+                QA_summ, QG_summ, QA_global_step, RL_global_step, loss = self.rl_test_batch(batch)
+                global_step = RL_global_step
+            elif name == 'QA':
+                QA_summ, QA_global_step, loss, acc = self.QA_test_batch(batch)
+                tot_QA_acc.append(acc)
             tot_loss.append(loss)
-            # tot_QA_acc.append(QA_acc)
         data.reset()
-        # avg_J = np.mean(tot_J)
-        # avg_r = np.mean(r)
-        avg_loss = np.mean(tot_loss)
-        # avg_QA_acc = np.mean(tot_QA_acc)
-        # print("[{}] J = {:.4f} reward = {:.4f} QA_Loss = {:.4f} QA_ACC = {:.4f}"
-              # .format(name, avg_J, avg_r, avg_QA_loss, avg_QA_acc))
-        self.validation_summary_writer.add_summary(QA_summ, global_step)
-        self.validation_summary_writer.add_summary(QG_summ, global_step)
-        return avg_loss
+        self.validation_summary_writer.add_summary(QA_summ, QA_global_step)
+        if not name == 'QA':
+            self.validation_summary_writer.add_summary(QG_summ, global_step)
+            return np.mean(tot_loss)
+        return np.mean(tot_loss), np.mean(tot_QA_acc)
 
     def save(self, step):
         assert not self.action == 'test'

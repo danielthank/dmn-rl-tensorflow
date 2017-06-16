@@ -71,7 +71,6 @@ def _build_vocab(filename):
 
 def _file_to_word_ids(filename, word_to_id):
   data = _read_words(filename)
-  data = ['where', 'is', 'mary', '<eos>', 'where', 'where', 'where', '<eos>']
   return [word_to_id[word] for word in data if word in word_to_id]
 
 def babi_tokenizer(data, word_to_id):
