@@ -31,9 +31,10 @@ class RNNLM(BaseModel):
 
         with tf.variable_scope('RNNLM', initializer=normal_initializer):
             # Embeddings
-            embedding_params = tf.get_variable('embedding_params', [vocab_size, hidden_size])
+            with tf.device('/cpu:0'):
+                embedding_params = tf.get_variable('embedding_params', [vocab_size, hidden_size])
 
-            inputs_embedding = tf.nn.embedding_lookup(embedding_params, inputs)
+                inputs_embedding = tf.nn.embedding_lookup(embedding_params, inputs)
             inputs_embedding = tf.cond(is_training, 
                                         lambda: tf.nn.dropout(inputs_embedding, keep_prob),
                                         lambda: inputs_embedding)
