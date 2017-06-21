@@ -45,6 +45,20 @@ def run_experiments(task, args, MainModel, RL):
         expert_params = params._replace(action='test', load_dir=params.expert_dir, **load_params)
     else:
         raise Exception("Need to load an expert from expert_dir to run experiments!")
+    if not params.lm_dir == '':
+        params_filename = os.path.join(params.lm_dir, 'params.json')
+        load_params = load_params_dict(params_filename)
+        if not load_params['target'] == 'lm':
+            raise Exception("dir contains no language model!")
+        lm_params = params._replace(action='test', 
+                                    load_dir=params.lm_dir,
+                                    lm_num_steps=1,
+                                    lm_batch_size=params.batch_size,
+                                    **load_params)
+    else:
+        if params.target == 'learner':
+            print("No language model used in learner!")
+        lm_params = None
     
     #record = np.array(['training sample','train acc','val acc','test acc'])
     #record = np.expand_dims(record, axis=0)
@@ -61,7 +75,7 @@ def run_experiments(task, args, MainModel, RL):
         rltrain_data = train[int(train.count*pre_ratio):]
         print("rltrain_num:", rltrain_data.count)
         ## run action ##
-        main_model = MainModel(words, learner_params, expert_params)
+        main_model = MainModel(words, learner_params, expert_params, lm_params)
         main_model.pre_train(pretrain_data, val, pretrain_data)
         if RL:
             main_model.rl_train(rltrain_data, val, pretrain_data, Q_limit=num_sample)

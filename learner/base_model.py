@@ -7,6 +7,7 @@ import tensorflow as tf
 
 from expert.dmn import DMN as EXPERT_DMN
 from expert.ren import REN as EXPERT_REN
+from lm.rnnlm import RNNLM as LM_RNNLM
 from data_helper.question_memory import QuestionMemory
 
 
@@ -41,11 +42,11 @@ def get_exist_rewards(batch, anses):
 ## accessible expert model ##
 EXPERT_MODEL = {'expert_dmn': EXPERT_DMN,
                 'expert_ren': EXPERT_REN}
-
+LM_MODEL = {'lm_RNNLM': LM_RNNLM}
 
 class BaseModel(object):
     """ Code from mem2nn-tensorflow. """
-    def __init__(self, words, params, expert_params, *args):
+    def __init__(self, words, params, expert_params, lm_params, *args):
         ## words ##
         self.words = words
 
@@ -134,6 +135,13 @@ class BaseModel(object):
         print("Loading Expert...")
         self.expert = self.load_expert(expert_params)
 
+        ## load lm ##
+        if not lm_params == None:
+            print('Loading Language model...')
+            self.lm = self.load_lm(lm_params)
+        else:
+            self.lm = None
+
         ## reward baseline ##
         self.baseline = 0.
 
@@ -175,14 +183,18 @@ class BaseModel(object):
             learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         rep_rewards = get_rep_rewards(pred_qs, self.words.vocab_size).astype('float32')
         exist_rewards = get_exist_rewards(batch, expert_anses)
+        perp = None
+        if self.lm is not None:
+            perp = self.ask_lm(pred_qs)
         #CQ_rewards = self.CQ_reward(batch[0], pred_qs)
 
         if not is_discriminator:
-            tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 1.*discriminator_probs
+            #tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 1.*discriminator_probs
+            tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp*0.1
         else:
-            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards# + (-1.)*discriminator_probs
+            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
 
-        return tot_rewards, expert_anses, discriminator_probs
+        return tot_rewards, expert_anses, discriminator_probs, perp
 
     def D_train_batch(self, q_batch, label_batch):
         feed_dict = {self.q: q_batch, self.D_labels: label_batch}
@@ -306,22 +318,22 @@ class BaseModel(object):
                     QA_summ, QG_summ, Pre_global_step, _ = self.pre_train_batch(batch)
                     feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=True)
                     pred_qs = self.get_question(feed_dict)
-                    rewards, expert_anses, d = self.get_rewards(batch, pred_qs, is_discriminator=True)
+                    rewards, expert_anses, d, perp = self.get_rewards(batch, pred_qs, is_discriminator=True)
                     if i == 0:
-                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0], 'Task:', batch[3][0])
+                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0], 'perp:', perp[0] if perp is not None else 'None', 'Task:', batch[3][0])
                         #print("bad Predict_Q: ", self.q2string(pred_qs[rewards < 1.5][0]), 'Rewards:', rewards[rewards < 1.5][0], 'D:', d[rewards < 1.5][0])
-                        print("push %d bad  questions to mem of size %d" % (len(pred_qs[rewards < 1.5]), len(f_q_mem)))
-                        print("push %d good questions to mem of size %d" % (len(pred_qs[rewards > 4.5]), len(t_q_mem)))
-                    f_q_mem.append(pred_qs[rewards < 1.5])
-                    t_q_mem.append(pred_qs[rewards > 4.5])
-                    for ep_j in range(1):
-                        D_summ, D_global_step = self.D_train(t_q_mem, f_q_mem)
+                        #print("push %d bad  questions to mem of size %d" % (len(pred_qs[rewards < 1.5]), len(f_q_mem)))
+                        #print("push %d good questions to mem of size %d" % (len(pred_qs[rewards > 4.5]), len(t_q_mem)))
+                    #f_q_mem.append(pred_qs[rewards < 1.5])
+                    #t_q_mem.append(pred_qs[rewards > 4.5])
+                    #for ep_j in range(1):
+                        #D_summ, D_global_step = self.D_train(t_q_mem, f_q_mem)
                         # if ep_j%1 == 0:
                             # print("[Discriminator], D_Loss = {:.4f}, ACC = {:.4f}".format(D_loss, D_acc))
                     var_summ = self.sess.run(self.merged_VAR)
                     # print("[Training epoch {}/{} step {}], QA_Loss = {:.4f}, QG_Loss = {:.4f}, QA_ACC = {:.4f}".format(epoch_no, num_epochs, Pre_global_step, QA_loss, QG_loss, QA_acc))
                     # print()
-                    self.summary_writer.add_summary(D_summ, D_global_step)
+                    #self.summary_writer.add_summary(D_summ, D_global_step)
                     self.summary_writer.add_summary(QA_summ, Pre_global_step)
                     self.summary_writer.add_summary(QG_summ, Pre_global_step)
                 self.var_summary_writer.add_summary(var_summ, Pre_global_step)
@@ -555,6 +567,19 @@ class BaseModel(object):
         ExpertModel = EXPERT_MODEL[expert_model_name]
         return ExpertModel(self.words, expert_params, None)
 
+    def load_lm(self, lm_params):
+        assert not lm_params == None
+        lm_model_name = '{}_{}'.format(lm_params.target, lm_params.arch)
+        LMModel = LM_MODEL[lm_model_name]
+        ## load lm vocab ##
+        assert lm_params.load_dir is not None, 'Please provide loading dir for LM'
+        filename = os.path.join(lm_params.load_dir, 'vocab.json')
+        with open(filename, 'r') as file:
+            self.lm_word_to_id = json.load(file)
+            vocab_size = len(self.lm_word_to_id)
+            print('[lm] Load %s with vocab size: %d' % (filename, vocab_size))
+        return LMModel(vocab_size, lm_params)
+
     def ask_learner(self, batch, pred_qs):
         feed_dict = self.get_feed_dict(batch, feed_previous=False, is_train=False, is_sample=False)
         feed_dict[self.q] = pred_qs
@@ -591,6 +616,22 @@ class BaseModel(object):
         # except <eos> and <go>
         max_logits_norm = (np.max(ans_logits[:, 2:], axis=1) - np.mean(ans_logits, axis=1)) / np.std(ans_logits, axis=1)
         return max_logits_norm, max_index
+    
+    def ask_lm(self, pred_qs):
+        batch_size = pred_qs.shape[0]
+        ## translate tokens, pad q with <eos> ##
+        qs = [self.lm_word_to_id[self.words.idx2word[token]] if self.words.idx2word[token] in self.lm_word_to_id else self.lm_word_to_id['<unk>'] for token in pred_qs.ravel()]
+        qs = np.array(qs).reshape((batch_size, -1))
+        qs = np.insert(qs, qs.shape[1], self.lm_word_to_id['<eos>'], axis=1)
+
+        ## form standard LMDataSet ##
+        from lm.lm_helper import LMDataSet
+        assert self.lm.params.lm_num_steps == 1
+        qs = LMDataSet(batch_size, self.lm.params.lm_num_steps, qs.ravel())
+        _, log_perps, iters = self.lm.eval(qs, self.lm.params.action)
+        perp = np.exp(np.sum(log_perps, axis=1) / iters)
+        return perp
+
 
     def CQ_similarity(self, content, keyterm):
         ## keyterm should be a word idx
