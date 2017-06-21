@@ -20,7 +20,7 @@ def tokenize(sentence):
             ret.append(token.lower())
     return ret
 
-def parse_task(lines, only_supporting=False):
+def parse_task(lines, task_id, only_supporting=False):
     """
     Parse the bAbI task format described here: https://research.facebook.com/research/babi/
     If only_supporting is True, only the sentences that support the answer are kept.
@@ -45,7 +45,7 @@ def parse_task(lines, only_supporting=False):
             else:
                 # Provide all the substories
                 substory = [x for x in story if x]
-            stories.append((substory, query, answer))
+            stories.append((substory, query, answer, task_id))
             story.append('')
         else:
             sentence = tokenize(line)
@@ -57,7 +57,7 @@ def get_tokenizer(stories, word_table):
     Recover unique tokens as a vocab and map the tokens to ids.
     """
     tokens_all = []
-    for story, query, answer in stories:
+    for story, query, answer, task_id in stories:
         for sentence in story:
             word_table.add_vocab(*sentence)
             word_table.count_doc(*sentence)
@@ -71,7 +71,8 @@ def pad_task(task, max_story_length, max_sentence_length, max_query_length):
     stories = []
     questions = []
     answers = []
-    for story, query, answer in task:
+    task_ids = []
+    for story, query, answer, task_id in task:
         for sentence in story:
             for _ in range(max_sentence_length - len(sentence)):
                 sentence.append(0)
@@ -86,17 +87,18 @@ def pad_task(task, max_story_length, max_sentence_length, max_query_length):
         stories.append(story)
         questions.append(query)
         answers.append(answer)
+        task_ids.append(task_id)
 
         assert len(story) == max_story_length
         assert len(query) == max_query_length
 
-    return stories, questions, answers
+    return stories, questions, answers, task_ids
 
 def truncate_task(stories, max_length):
     stories_truncated = []
-    for story, query, answer in stories:
+    for story, query, answer, task_id in stories:
         story_truncated = story[-max_length:]
-        stories_truncated.append((story_truncated, query, answer))
+        stories_truncated.append((story_truncated, query, answer, task_id))
     return stories_truncated
 
 def tokenize_task(stories, word_table):
@@ -104,11 +106,11 @@ def tokenize_task(stories, word_table):
     Convert all tokens into their unique ids.
     """
     story_ids = []
-    for story, query, answer in stories:
+    for story, query, answer, task_id in stories:
         story = [[word_table.word2idx[token] for token in sentence] for sentence in story]
         query = [word_table.word2idx[token] for token in query]
         answer = word_table.word2idx[answer]
-        story_ids.append((story, query, answer))
+        story_ids.append((story, query, answer, task_id))
     return story_ids
 
 def read_babi(task_ids, batch_size, isexpert):
@@ -129,13 +131,13 @@ def read_babi(task_ids, batch_size, isexpert):
             truncate_length = 70
 
         f_train = open(os.path.join('babi', 'train', 'task_{}.txt'.format(task_id)))
-        train = parse_task(f_train.readlines())
+        train = parse_task(f_train.readlines(), task_id)
         train = truncate_task(train, truncate_length)
         get_tokenizer(train, word_table)
         train = tokenize_task(train, word_table)
 
         f_test = open(os.path.join('babi', 'test', 'task_{}.txt'.format(task_id)))
-        test = parse_task(f_test.readlines())
+        test = parse_task(f_test.readlines(), task_id)
         test = truncate_task(test, truncate_length)
         get_tokenizer(test, word_table)
         test = tokenize_task(test, word_table)
@@ -150,19 +152,19 @@ def read_babi(task_ids, batch_size, isexpert):
     random.shuffle(train)
     random.shuffle(test)
 
-    a = max([len(story) for story, _, _ in train])
-    b = max([len(story) for story, _, _ in test])
+    a = max([len(story) for story, _, _, _ in train])
+    b = max([len(story) for story, _, _, _ in test])
     max_story_length = max(a, b)
 
-    a = max([len(sentence) for story, _, _ in train for sentence in story])
-    b = max([len(sentence) for story, _, _ in test for sentence in story])
+    a = max([len(sentence) for story, _, _, _ in train for sentence in story])
+    b = max([len(sentence) for story, _, _, _ in test for sentence in story])
     max_sentence_length = max(a, b)
 
-    a = max([len(question) for _, question, _ in train])
-    b = max([len(question) for _, question, _ in test])
+    a = max([len(question) for _, question, _, _ in train])
+    b = max([len(question) for _, question, _, _ in test])
     max_question_length = max(a, b)
 
-    train_stories, train_questions, train_answers = pad_task(train, max_story_length, max_sentence_length, max_question_length)
-    test_stories, test_questions, test_answers = pad_task(test, max_story_length, max_sentence_length, max_question_length)
+    train_stories, train_questions, train_answers, train_task_ids = pad_task(train, max_story_length, max_sentence_length, max_question_length)
+    test_stories, test_questions, test_answers, test_task_ids = pad_task(test, max_story_length, max_sentence_length, max_question_length)
 
-    return DataSet(batch_size, train_stories, train_questions, train_answers, name='train'), DataSet(batch_size, test_stories, test_questions, test_answers, name='test'), word_table, max_story_length, max_sentence_length, max_question_length
+    return DataSet(batch_size, train_stories, train_questions, train_answers, train_task_ids, name='train'), DataSet(batch_size, test_stories, test_questions, test_answers, test_task_ids, name='test'), word_table, max_story_length, max_sentence_length, max_question_length

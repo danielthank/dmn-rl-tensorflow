@@ -20,11 +20,13 @@ class Seq2Seq(BaseModel):
         params = self.params
         L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, A = params.seq2seq_hidden_size, self.words.vocab_size
+        N = params.batch_size
 
-        input = tf.placeholder('int32', shape=[None, F, L], name='x')
-        question = tf.placeholder('int32', shape=[None, Q], name='q')
-        answer = tf.placeholder('int32', shape=[None], name='y')
-        self.batch_size = tf.shape(answer)[0]
+        input = tf.placeholder('int32', shape=[N, F, L], name='x')
+        question = tf.placeholder('int32', shape=[N, Q], name='q')
+        answer = tf.placeholder('int32', shape=[N], name='y')
+        #self.batch_size = tf.shape(answer)[0]
+        self.batch_size = N
         fact_counts = get_sequence_length(input)
         self.is_training = tf.placeholder(tf.bool)
         self.is_sample = tf.placeholder(tf.bool)
@@ -33,18 +35,20 @@ class Seq2Seq(BaseModel):
         question_positional_encoding = positional_encoding(Q, V)
         embedding_mask = tf.constant([0 if i == 0 else 1 for i in range(A)], dtype=tf.float32, shape=[A, 1])
 
-        D_labels = tf.placeholder('bool', shape=[None], name='D_labels')
+        D_labels = tf.placeholder('bool', shape=[N], name='D_labels')
 
         with tf.variable_scope('QA', initializer=tf.contrib.layers.xavier_initializer()) as QA_scope:
-            qa_embedding = tf.get_variable('qa_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+            with tf.device("/cpu:0"):
+                qa_embedding = tf.get_variable('qa_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
             qa_embedding = qa_embedding * embedding_mask
             with tf.variable_scope('SentenceReader'):
-                qa_story = tf.nn.embedding_lookup(qa_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
+                with tf.device("/cpu:0"):
+                    qa_story = tf.nn.embedding_lookup(qa_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
                 # apply positional encoding
                 qa_story = story_positional_encoding * qa_story
                 qa_story = tf.reduce_sum(qa_story, 2)  # [batch, story, embedding_size]
                 qa_story = dropout(qa_story, 0.5, self.is_training)
-                num_layers = 2
+                num_layers = 3
                 q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
                 q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
                 (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
@@ -54,7 +58,8 @@ class Seq2Seq(BaseModel):
                                                                                        dtype=tf.float32)
                 qa_story = qa_states_fw + qa_states_bw
             with tf.name_scope('QuestionReader'):
-                qa_q = tf.nn.embedding_lookup(qa_embedding, question) # [N, Q, V]
+                with tf.device("/cpu:0"):
+                    qa_q = tf.nn.embedding_lookup(qa_embedding, question) # [N, Q, V]
                 qa_q = question_positional_encoding * qa_q
                 qa_q = tf.reduce_sum(qa_q, 1) # [N, V]
                 qa_q = dropout(qa_q, 0.5, self.is_training)
@@ -79,15 +84,17 @@ class Seq2Seq(BaseModel):
             tf.summary.scalar('accuracy', QA_accuracy, collections=["QA_SUMM"])
 
         with tf.variable_scope('QG', initializer=tf.contrib.layers.xavier_initializer()):
-            qg_embedding = tf.get_variable('qg_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+            with tf.device("/cpu:0"):
+                qg_embedding = tf.get_variable('qg_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
             qg_embedding = qg_embedding * embedding_mask
             with tf.variable_scope('SentenceReader'):
-                qg_story = tf.nn.embedding_lookup(qg_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
+                with tf.device("/cpu:0"):
+                    qg_story = tf.nn.embedding_lookup(qg_embedding, input) # [batch, story, sentence] -> [batch, story, sentence, embedding_size]
                 # apply positional encoding
                 qg_story = story_positional_encoding * qg_story
                 qg_story = tf.reduce_sum(qg_story, 2)  # [batch, story, embedding_size]
                 qg_story = dropout(qg_story, 0.5, self.is_training)
-                num_layers = 2
+                num_layers = 3
                 q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
                 q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
                 (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
@@ -97,7 +104,8 @@ class Seq2Seq(BaseModel):
                                                                                        dtype=tf.float32)
                 qg_story = qg_states_fw + qg_states_bw
             with tf.name_scope('QuestionReader'):
-                qg_q = tf.nn.embedding_lookup(qg_embedding, question) # [N, Q, V]
+                with tf.device("/cpu:0"):
+                    qg_q = tf.nn.embedding_lookup(qg_embedding, question) # [N, Q, V]
                 qg_q = dropout(qg_q, 0.5, self.is_training)
             q_logprobs, chosen_idxs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous, self.is_training)
             q_probs = tf.nn.softmax(q_logprobs, dim=-1)
@@ -113,7 +121,8 @@ class Seq2Seq(BaseModel):
             tf.summary.scalar('loss', QG_total_loss, collections=["QG_SUMM"])
 
         with tf.variable_scope("Discriminator", initializer=tf.contrib.layers.xavier_initializer()):
-            D_embedding = tf.get_variable('D_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
+            with tf.device("/cpu:0"):
+                D_embedding = tf.get_variable('D_embedding', [A, V], initializer=tf.contrib.layers.xavier_initializer())
             D_embedding = D_embedding * embedding_mask
             D_logits = self.Discriminator(D_embedding, question)
             D_probs = tf.nn.softmax(D_logits)[:, 1]
@@ -136,8 +145,8 @@ class Seq2Seq(BaseModel):
 
         # Policy Gradient
         with tf.name_scope("PolicyGradient"):
-            chosen_one_hot = tf.placeholder(tf.float32, shape=[None, Q, A], name='act')
-            rewards = tf.placeholder(tf.float32, shape=[None], name='rewards')
+            chosen_one_hot = tf.placeholder(tf.float32, shape=[N, Q, A], name='act')
+            rewards = tf.placeholder(tf.float32, shape=[N], name='rewards')
             baseline_t = tf.placeholder(tf.float32, shape=[], name='baseline')
             advantages = rewards - baseline_t
             tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
@@ -212,7 +221,8 @@ class Seq2Seq(BaseModel):
         num_filters = [3, 5]
         
         with tf.name_scope('D_QuestionReader'):
-            D_q = tf.nn.embedding_lookup(D_embedding, question) # [N, Q, V]
+            with tf.device("/cpu:0"):
+                D_q = tf.nn.embedding_lookup(D_embedding, question) # [N, Q, V]
             #D_q = tf.expand_dims(D_q, -1) # [N, Q, V, 1]
             D_qf = tf.reshape(D_q, shape=[-1, Q*V]) # [N, Q, V] -> [N, Q*V]
         #[filter_height, filter_width, in_channels, out_channels]
@@ -261,7 +271,8 @@ class Seq2Seq(BaseModel):
         num_layers = 1
         #q_cell = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(params.seq2seq_hidden_size) for l in range(num_layers)])
         go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
-        go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
+        with tf.device("/cpu:0"):
+            go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         decoder_inputs = tf.unstack(go_pad, axis=1) # 1 * [N, V]
 
         initial_state = (qa_q, qa_q)
@@ -289,7 +300,8 @@ class Seq2Seq(BaseModel):
         """
         ## build decoder inputs ##
         go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
-        go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
+        with tf.device("/cpu:0"):
+            go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         decoder_inputs = tf.concat(axis=1, values=[go_pad, qg_q]) # [N, Q+1, V]
         decoder_inputs = tf.unstack(decoder_inputs, axis=1)[:-1] # Q * [N, V]
 
@@ -320,7 +332,8 @@ class Seq2Seq(BaseModel):
                                   lambda: tf.argmax(prev, 1),#gumbel_softmax(prev / explore_eps, 1),
                                   lambda: tf.argmax(prev, 1))
             chosen_idxs.append(prev_symbol)
-            emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
+            with tf.device("/cpu:0"):
+                emb_prev = tf.nn.embedding_lookup(embedding, prev_symbol)
             next_inp = tf.cond(feed_previous,
                                lambda: emb_prev,
                                lambda: decoder_inputs[i])

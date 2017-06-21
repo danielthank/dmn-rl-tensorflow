@@ -6,12 +6,13 @@ import numpy as np
 import math
 import random
 class DataSet:
-    def __init__(self, batch_size, xs, qs, ys, shuffle=True, name="dataset"):
+    def __init__(self, batch_size, xs, qs, ys, ids, shuffle=True, name="dataset"):
         assert batch_size <= len(xs), "batch size cannot be greater than data size."
         self.name = name
         self.xs = np.array(xs, dtype=np.int32)
         self.qs = np.array(qs, dtype=np.int32)
         self.ys = np.array(ys, dtype=np.int32)
+        self.ids = np.array(ids, dtype=np.int32)
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.count = len(self.xs)
@@ -39,11 +40,12 @@ class DataSet:
         xs = self.xs[cur_idxs]
         qs = self.qs[cur_idxs]
         ys = self.ys[cur_idxs]
+        ids = self.ids[cur_idxs]
         self.current_index = to
-        return xs, qs, ys
+        return xs, qs, ys, ids
 
     def get_all(self):
-        return self.xs[self.indexes], self.qs[self.indexes], self.ys[self.indexes]
+        return self.xs[self.indexes], self.qs[self.indexes], self.ys[self.indexes], self.ids[self.indexes]
 
     def get_batch_cnt(self, cnt):
         if not self.has_next_batch(cnt):
@@ -53,8 +55,9 @@ class DataSet:
         xs = self.xs[cur_idxs]
         qs = self.qs[cur_idxs]
         ys = self.ys[cur_idxs]
+        ids = self.ids[cur_idxs]
         self.current_index += cnt
-        return xs, qs, ys
+        return xs, qs, ys, ids
 
     def get_bad_batch_cnt(self, cnt, vocab_size):
         if not self.has_next_batch(cnt):
@@ -64,11 +67,12 @@ class DataSet:
         xs = self.xs[cur_idxs]
         qs = self.qs[cur_idxs]
         ys = np.ones((cnt,), dtype=np.int32) # <go>
+        ids = self.ids[cur_idxs]
         choose = np.random.rand(*qs.shape) < 0.5
         choose[:, -1] = False # do not change <eos>
         qs = qs * (~choose) + np.random.randint(2, vocab_size, size=qs.shape) * choose # do not change to <eos> or <go>
         self.current_index += cnt
-        return xs, qs, ys
+        return xs, qs, ys, ids
     """
     def has_next_batch(self, full_batch):
         if full_batch:

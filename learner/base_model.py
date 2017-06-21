@@ -308,7 +308,7 @@ class BaseModel(object):
                     pred_qs = self.get_question(feed_dict)
                     rewards, expert_anses, d = self.get_rewards(batch, pred_qs, is_discriminator=True)
                     if i == 0:
-                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0])
+                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0], 'Task:', batch[3][0])
                         #print("bad Predict_Q: ", self.q2string(pred_qs[rewards < 1.5][0]), 'Rewards:', rewards[rewards < 1.5][0], 'D:', d[rewards < 1.5][0])
                         print("push %d bad  questions to mem of size %d" % (len(pred_qs[rewards < 1.5]), len(f_q_mem)))
                         print("push %d good questions to mem of size %d" % (len(pred_qs[rewards > 4.5]), len(t_q_mem)))
@@ -393,7 +393,7 @@ class BaseModel(object):
                     mean_r = np.mean(r_all)
                     if i == 0:
                         text = "Content:\n" + self.content2string(batch[0][0])
-                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Adv: ' + str(r_all[0] - self.baseline) + ' D: '+str(d[0])
+                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Adv: ' + str(r_all[0] - self.baseline) + ' D: ' + str(d[0]) + ' Task: ' + str(batch[3][0])
                         print(text)
                         print()
                     r.append(mean_r)
@@ -402,7 +402,8 @@ class BaseModel(object):
                         QA_x_mem.append(batch[0])
                         QA_q_mem.append(pred_qs)
                         QA_y_mem.append(expert_anses)
-                        print("push %d questions to mem of size %d" % (len(pred_qs), len(QA_q_mem)))
+                        if not Q_limit == np.inf:
+                            print("push %d questions to mem of size %d" % (len(pred_qs), len(QA_q_mem)))
                     if len(QA_x_mem) >= params.batch_size * 2 and not self.merged_QA == None:
                     #if not self.merged_QA == None:
                         self.QA_train(QA_x_mem,
