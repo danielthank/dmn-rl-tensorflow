@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import math
 
 import numpy as np
 import tensorflow as tf
@@ -8,7 +9,6 @@ import tensorflow as tf
 from expert.dmn import DMN as EXPERT_DMN
 from expert.ren import REN as EXPERT_REN
 from data_helper.question_memory import QuestionMemory
-
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-0.3*x))
@@ -345,14 +345,12 @@ class BaseModel(object):
         np.random.shuffle(indx)
         mem_length = len(QA_x_mem)
         if num_batch == 'all':
-            num_batch = math.ceil(mem_length/params.batch_size)
-        
+            num_batch = math.ceil(float(mem_length)/params.batch_size)
         for j in range(num_batch):
             if (j+1)*params.batch_size < mem_length: 
                 tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
             else:
                 tmp = indx[j * params.batch_size: mem_length]
-
             QA_summ, QA_global_step, _ = self.QA_train_batch((QA_x_mem[tmp],
                                                               QA_q_mem[tmp],
                                                               QA_y_mem[tmp]),
@@ -519,25 +517,29 @@ class BaseModel(object):
             return val_loss, val_acc
         return
 
-    def eval(self, data, name):
-        num_batches = data.num_batches
+    def eval(self, data_set, name):
+        if type(data_set) != list:
+            data_set = [data_set]
         tot_loss = []
         tot_QA_acc = []
-        for _ in range(num_batches):
-            batch = data.next_batch()
-            if name == 'pre':
-                QA_summ, QG_summ, pre_global_step, loss = self.pre_test_batch(batch)
-                QA_global_step = pre_global_step
-                global_step = pre_global_step
-            elif name == 'rl':
-                QA_summ, QG_summ, QA_global_step, RL_global_step, loss = self.rl_test_batch(batch)
-                global_step = RL_global_step
-            elif name == 'QA':
-                QA_summ, QA_global_step, loss, acc = self.QA_test_batch(batch)
+        for data in data_set :
+            num_batches = data.get_batch_num(full_batch=False)
+            for _ in range(num_batches):
+                batch = data.next_batch(full_batch=False)
+                if name == 'pre':
+                    QA_summ, QG_summ, pre_global_step, loss = self.pre_test_batch(batch)
+                    QA_global_step = pre_global_step
+                    global_step = pre_global_step
+                elif name == 'rl':
+                    QA_summ, QG_summ, QA_global_step, RL_global_step, loss = self.rl_test_batch(batch)
+                    global_step = RL_global_step
+                elif name == 'QA':
+                    QA_summ, QA_global_step, loss, acc = self.QA_test_batch(batch)
+                
                 tot_QA_acc.append(acc)
-            tot_loss.append(loss)
-        data.reset()
-        self.validation_summary_writer.add_summary(QA_summ, QA_global_step)
+                tot_loss.append(loss)
+                data.reset()
+                self.validation_summary_writer.add_summary(QA_summ, QA_global_step)
         if not name == 'QA':
             self.validation_summary_writer.add_summary(QG_summ, global_step)
             return np.mean(tot_loss)

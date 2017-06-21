@@ -1,16 +1,17 @@
 from collections import deque
 import warnings
 import numpy as np
-from question_memory import QuestionMemory
+from .question_memory import QuestionMemory
 
 class DQNMemory():
     def __init__(self,state_shape,action_num,max_len):
         self.state_mem = QuestionMemory(state_shape,max_len)
-        self.action_mem = QuestionMemory((),max_len)  ## one hot action
+        self.action_mem = QuestionMemory((),max_len,dtype=np.int32)  
         self.reword_mem = QuestionMemory((),max_len)
         self.next_state_mem = QuestionMemory(state_shape,max_len)
         self.terminate_mem = QuestionMemory((),max_len)
         self.size = 0
+        self.total_append_size = 0
         self.state_shape = state_shape
         self.action_num = action_num
         self.max_len = max_len
@@ -35,10 +36,11 @@ class DQNMemory():
         
         if self.size < self.max_len:
             self.size += 1
+        self.total_append_size += 1
     def __getitem__(self,key):
         states = self.state_mem[key]
         
-        actions = self,action_mem[key]
+        actions = self.action_mem[key]
         one_hot_actions = np.zeros((actions.shape[0],self.action_num),dtype='int32')
         one_hot_actions[np.arange(actions.shape[0]),actions] = 1
         

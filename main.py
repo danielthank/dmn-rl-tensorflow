@@ -103,7 +103,7 @@ def main(_):
             os.makedirs(save_dir+'/record', exist_ok=True)
     elif args.action == 'type_select':
         #assert args.task == 'all'
-        save_dir = os.path.join('save_type_select', '{}_{}'.format(args.arch, args.task))
+        save_dir = os.path.join('save_type_select', '{}_{}'.format(args.arch, '_'.join(args.task)))
         if not os.path.exists(save_dir):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
@@ -127,9 +127,14 @@ def main(_):
         for task in task_list:
             run_baseline(task, args, MainModel)
     elif args.action == 'type_select':
-        ## type_select use all task by default
         args.action = 'train'
-        run_type_select(args,MainModel)
+        mode = 'train'
+        if 'all' in args.task:
+            task_list = list(range(1,21))
+        else:
+            task_list = [int(i) for i in args.task]
+
+        run_type_select(task_list,args,MainModel,mode)
     elif args.action == 'experiments_rl':
         assert args.target == "learner", "RL Experiments can only run by a learner!"
         args.action = 'train'

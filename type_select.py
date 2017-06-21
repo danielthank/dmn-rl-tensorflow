@@ -2,10 +2,31 @@ import numpy as np
 from collections import namedtuple
 from data_helper.read_data import read_babi
 
-def run_type_select(args, MainModel):
-    #tasks = [[i] for i in range(1,21)]
-    tasks = [[1]]
-    words=None
+'''
+def merge_dataset(args,dataset_list,name):
+    xs = None
+    qs = None
+    ys = None
+    for dataset in dataset_list:
+        x = dataset.xs
+        q = dataset.qs
+        y = dataset.ys
+        if xs is None :
+            xs = x
+            qs = q
+            ys = y
+        else :
+            xs = np.concatenate(xs,x)
+            qs = np.concatenate(qs,q)
+            ys = np.concatenate(ys,y)
+
+    return DataSet()
+'''
+
+def run_type_select(task_list,args, MainModel,mode):
+    #tasks = list(range(1,21))
+    #tasks = list(range(1,4))
+    args.action_num = len(task_list)
     train_all = []
     test_all = []
     val_all = []
@@ -14,25 +35,10 @@ def run_type_select(args, MainModel):
     max_question_size = 0
     ## data set ##
     print ('Reading babi data...')
-    for task in tasks :
-        print (task,end='\r')
-        train, test, words, story_size, sentence_size, question_size = read_babi(task, args.batch_size, False,words)
-        val = train.split_dataset(args.val_ratio)
+    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(task_list, args.batch_size, False,'seperate')
+    print ('Reading babi over!')
+    val = [data_set.split_dataset(args.val_ratio) for data_set in train]
         
-        train_all.append(train)
-        val_all.append(val)
-        test_all.append(test)
-
-        max_story_size = max(max_story_size,story_size)
-        max_sentence_size = max(max_sentence_size,sentence_size)
-        max_question_size = max(max_question_size, question_size)
-    args.story_size = max_story_size
-    args.sentence_size = max_sentence_size
-    args.question_size = max_question_size
-    
-    #print("training count: {}".format(train.count))
-    #print("testing count: {}".format(test.count))
-
     print("story size: {}".format(args.story_size))
     print("sentence size: {}".format(args.sentence_size))
     print("question size: {}".format(args.question_size))
@@ -43,7 +49,10 @@ def run_type_select(args, MainModel):
     params = params_class(**params_dict)
   
     main_model = MainModel(words,params)
-    main_model.train(train_all,val_all)
+    if mode == 'baseline':
+        main_model.train_baseline(train,val)
+    else:
+        main_model.train(train,val)
     
     '''
     record = np.array(['training sample','train acc','val acc','test acc'])

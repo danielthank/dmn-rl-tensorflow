@@ -111,18 +111,21 @@ def tokenize_task(stories, word_table):
         story_ids.append((story, query, answer))
     return story_ids
 
-def read_babi(task_ids, batch_size, isexpert,word_table=None):
+def read_babi(task_ids, batch_size, isexpert, mode = 'together'):
     """ Reads bAbi data set.
     :param task_id: task no. (int)
     :param batch_size: how many examples in a minibatch?
     """
-    if word_table == None:
-        word_table = WordTable()
+    word_table = WordTable()
 
     all_train = []
     all_test = []
 
+    max_story_length = 0
+    max_sentence_length = 0
+    max_question_length = 0
     for task_id in task_ids:
+        print ('reading task %d'%task_id,end = '\r')
         if task_id == 3:
             # truncate_length = 130
             truncate_length = 70
@@ -141,13 +144,34 @@ def read_babi(task_ids, batch_size, isexpert,word_table=None):
         get_tokenizer(test, word_table)
         test = tokenize_task(test, word_table)
 
-        all_train.extend(train)
-        if isexpert:
-            all_train.extend(test)
-        all_test.extend(test)
+        a = max([len(story) for story, _, _ in train])
+        b = max([len(story) for story, _, _ in test])
+        max_story_length = max(a, b,max_story_length)
 
+        a = max([len(sentence) for story, _, _ in train for sentence in story])
+        b = max([len(sentence) for story, _, _ in test for sentence in story])
+        max_sentence_length = max(a, b,max_sentence_length)
+
+        a = max([len(question) for _, question, _ in train])
+        b = max([len(question) for _, question, _ in test])
+        max_question_length = max(a, b,max_question_length)
+
+        if mode == 'together':
+            all_train.extend(train)
+            if isexpert:
+                all_train.extend(test)
+            all_test.extend(test)
+        elif mode == 'seperate':
+            assert not isexpert
+            all_train.append(train)
+            all_test.append(test)
+        else:
+            raise Exception('unknown mode when reading babi : %s'%mode)
+
+        print ('reading task %d over!'%task_id)
     train = all_train
     test = all_test
+    '''
     random.shuffle(train)
     random.shuffle(test)
 
@@ -162,8 +186,27 @@ def read_babi(task_ids, batch_size, isexpert,word_table=None):
     a = max([len(question) for _, question, _ in train])
     b = max([len(question) for _, question, _ in test])
     max_question_length = max(a, b)
+    '''
+    if mode == 'together':
+        train_stories, train_questions, train_answers = pad_task(train, max_story_length, max_sentence_length, max_question_length)
+        test_stories, test_questions, test_answers = pad_task(test, max_story_length, max_sentence_length, max_question_length)
+        
+        train_data_set = DataSet(batch_size, train_stories, train_questions, train_answers, name='train')
+        test_data_set =  DataSet(batch_size, test_stories, test_questions, test_answers, name='test')
+        return train_data_set,test_data_set, word_table, max_story_length, max_sentence_length, max_question_length
+    elif mode == 'seperate':
+        train_data_set = []
+        test_data_set = []
+        for index,value in enumerate(task_ids):
+            train_stories, train_questions, train_answers = pad_task(train[index], 
+                                                                     max_story_length, 
+                                                                     max_sentence_length, 
+                                                                     max_question_length)
 
-    train_stories, train_questions, train_answers = pad_task(train, max_story_length, max_sentence_length, max_question_length)
-    test_stories, test_questions, test_answers = pad_task(test, max_story_length, max_sentence_length, max_question_length)
-
-    return DataSet(batch_size, train_stories, train_questions, train_answers, name='train'), DataSet(batch_size, test_stories, test_questions, test_answers, name='test'), word_table, max_story_length, max_sentence_length, max_question_length
+            test_stories, test_questions, test_answers = pad_task(test[index], 
+                                                                  max_story_length, 
+                                                                  max_sentence_length, 
+                                                                  max_question_length)
+            train_data_set.append(DataSet(batch_size,train_stories,train_questions,train_answers,name='train_%d'%value))
+            test_data_set.append(DataSet(batch_size,test_stories,test_questions,test_answers,name='test_%d'%value))
+        return train_data_set,test_data_set,word_table,max_story_length,max_sentence_length,max_question_length
