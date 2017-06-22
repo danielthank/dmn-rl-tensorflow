@@ -134,7 +134,7 @@ class LMDataSet:
             y = self.data[:, i * self.num_steps + 1: (i+1) * self.num_steps + 1]
             yield (x, y)
 
-def train_lm(model, params):
+def train_lm(model, params, *args):
     train_data, valid_data, test_data, word_to_id = raw_data_producer(params.lm_ptb_path, params.save_dir)
     vocab_size = len(word_to_id)
     train_data = LMDataSet(params.lm_batch_size, params.lm_num_steps, train_data)
@@ -143,7 +143,7 @@ def train_lm(model, params):
     LM.pre_train(train_data, valid_data)
     LM.save_params()
 
-def test_lm(model, params):
+def test_lm(model, params, *args):
     assert params.load_dir is not None, 'Please provide loading dir for LM'
     filename = os.path.join(params.load_dir, 'vocab.json')
     with open(filename, 'r') as file:

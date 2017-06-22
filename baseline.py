@@ -2,22 +2,8 @@ import numpy as np
 from collections import namedtuple
 from data_helper.read_data import read_babi
 
-def run_baseline(task, args, MainModel):
-    ## data set ##
-    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(task, args.batch_size, False)
-    val = train.split_dataset(args.val_ratio)
-    print("training count: {}".format(train.count))
-    print("testing count: {}".format(test.count))
-
-    print("story size: {}".format(args.story_size))
-    print("sentence size: {}".format(args.sentence_size))
-    print("question size: {}".format(args.question_size))
-
-    ## create params ##
-    params_dict = vars(args)
-    params_class = namedtuple('params_class', params_dict.keys())
-    params = params_class(**params_dict)
-    
+def run_baseline(MainModel, params, expert_params, lm_params, words, train, val):
+    assert params.action == 'baseline'
     record = np.array(['training sample','train acc','val acc','test acc'])
     record = np.expand_dims(record,axis=0)
     max_sample = min(train.count+1,2001)
@@ -28,7 +14,7 @@ def run_baseline(task, args, MainModel):
         print ('training data sample  : ',training_sample)
         train_sub = train[:training_sample]
         ## run action ##
-        main_model = MainModel(words, params)
+        main_model = MainModel(words, params, expert_params, lm_params)
         main_model.pre_train(train_sub, val)
         #main_model.save_params()
 

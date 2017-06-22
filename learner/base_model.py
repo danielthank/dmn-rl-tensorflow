@@ -218,11 +218,11 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True, is_sample=True)
         pred_qs = self.get_question(feed_dict)
 
-        rewards, expert_anses, rep = self.get_rewards(batch, pred_qs)
+        rewards, expert_anses, d, perp = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
         feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards, self.baseline_t: self.baseline})
-        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses, rep
+        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses, d, perp
 
     def q2string(self, q):
         for i in range(0, len(q)):
@@ -380,7 +380,7 @@ class BaseModel(object):
         QA_q_mem = QuestionMemory((params.question_size,), memory_size, dtype='int32')
         QA_y_mem = QuestionMemory((), memory_size, dtype='int32')
         if not pretrain_data is None:
-            pre_xs, pre_qs, pre_ys = pretrain_data.get_all()
+            pre_xs, pre_qs, pre_ys, pre_ids = pretrain_data.get_all()
             QA_x_mem.append(pre_xs)
             QA_q_mem.append(pre_qs)
             QA_y_mem.append(pre_ys)
@@ -400,12 +400,12 @@ class BaseModel(object):
                 # tot_QA_acc = [0.]
                 for i in range(num_batches):
                     batch = train_data.next_batch()
-                    (rl_summ, RL_global_step, _), r_all, pred_qs, expert_anses, d = self.rl_train_batch(batch)
+                    (rl_summ, RL_global_step, _), r_all, pred_qs, expert_anses, d, perp = self.rl_train_batch(batch)
                     self.summary_writer.add_summary(rl_summ, RL_global_step)
                     mean_r = np.mean(r_all)
                     if i == 0:
                         text = "Content:\n" + self.content2string(batch[0][0])
-                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Adv: ' + str(r_all[0] - self.baseline) + ' D: ' + str(d[0]) + ' Task: ' + str(batch[3][0])
+                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Adv: ' + str(r_all[0] - self.baseline) + ' D: ' + str(d[0]) + ' perp:' + (str(perp[0]) if perp is not None else 'None') + ' Task: ' + str(batch[3][0])
                         print(text)
                         print()
                     r.append(mean_r)
@@ -470,7 +470,7 @@ class BaseModel(object):
         QA_q_mem = QuestionMemory((params.question_size,), memory_size, dtype='int32')
         QA_y_mem = QuestionMemory((), memory_size, dtype='int32')
         if not pretrain_data is None:
-            pre_xs, pre_qs, pre_ys = pretrain_data.get_all()
+            pre_xs, pre_qs, pre_ys, pre_ids = pretrain_data.get_all()
             QA_x_mem.append(pre_xs)
             QA_q_mem.append(pre_qs)
             QA_y_mem.append(pre_ys)
@@ -482,10 +482,10 @@ class BaseModel(object):
             batch = train_data.next_batch()
             feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True, is_sample=True)
             pred_qs = self.get_question(feed_dict)
-            r_all, expert_anses, d = self.get_rewards(batch, pred_qs)
+            r_all, expert_anses, d, perp = self.get_rewards(batch, pred_qs)
             if i % 1 == 0:
                 text = "Content:\n" + self.content2string(batch[0][0])
-                text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' D: '+str(d[0])
+                text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' D: '+ str(d[0]) + ' perp:' + (str(perp[0]) if perp is not None else 'None') + ' Task: ' + str(batch[3][0])
                 print(text)
                 print()
             QA_x_mem.append(batch[0])

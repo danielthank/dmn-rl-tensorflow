@@ -2,67 +2,14 @@ import os
 import numpy as np
 import json
 import tensorflow as tf
-from collections import namedtuple
 from data_helper.read_data import read_babi
 
-def load_params_dict(filename):
-    with open(filename, 'r') as file:
-        params_dict = json.load(file)
-    return params_dict
 
-
-def run_experiments(task, args, MainModel, RL):
-    ## data set ##
-    args.task = task
-    train, test, words, args.story_size, args.sentence_size, args.question_size = read_babi(task, args.batch_size, False)
-    val = train.split_dataset(args.val_ratio)
-    print("training count: {}".format(train.count))
-    print("testing count: {}".format(test.count))
-
-    print("story size: {}".format(args.story_size))
-    print("sentence size: {}".format(args.sentence_size))
-    print("question size: {}".format(args.question_size))
-
-    ## create params ##
-    params_dict = vars(args)
-    params_class = namedtuple('params_class', params_dict.keys())
-    params = params_class(**params_dict)
-    if not params.load_dir == '':
-        raise Exception("Experiments Mode now only support training from scratch!")
-    else:
-        assert args.action == "train"
-        if tf.gfile.Exists(args.save_dir):
-            tf.gfile.DeleteRecursively(args.save_dir)
-        os.makedirs(args.save_dir, exist_ok=True)
-
-    if not params.expert_dir == '':
-        params_filename = os.path.join(params.expert_dir, 'params.json')
-        load_params = load_params_dict(params_filename)
-        if not load_params['task'] == params.task:
-            raise Exception("incompatible task with expert model!")
-        if not load_params['target'] == 'expert':
-            raise Exception("dir contains no expert model!")
-        expert_params = params._replace(action='test', load_dir=params.expert_dir, **load_params)
-    else:
-        raise Exception("Need to load an expert from expert_dir to run experiments!")
-    if not params.lm_dir == '':
-        params_filename = os.path.join(params.lm_dir, 'params.json')
-        load_params = load_params_dict(params_filename)
-        if not load_params['target'] == 'lm':
-            raise Exception("dir contains no language model!")
-        lm_params = params._replace(action='test', 
-                                    load_dir=params.lm_dir,
-                                    lm_num_steps=1,
-                                    lm_batch_size=params.batch_size,
-                                    **load_params)
-    else:
-        if params.target == 'learner':
-            print("No language model used in learner!")
-        lm_params = None
-    
+def run_experiments(MainModel, params, expert_params, lm_params, words, train, val, RL):
+    assert (params.action == 'experiments_rl' and RL) or (params.action == 'experiments_nonrl' and not RL)
     #record = np.array(['training sample','train acc','val acc','test acc'])
     #record = np.expand_dims(record, axis=0)
-    num_sample = min(train.count, 256*10*len(task))
+    num_sample = min(train.count, 256*10*len(params.task))
     train = train[:num_sample]
     print("train_num:", train.count)
     for pre_ratio in np.array(range(10, 100, 10))/100.:
