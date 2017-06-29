@@ -249,7 +249,7 @@ def main(_):
         train_process(MainModel, params, expert_params, lm_params, words, train, val)
 
     elif args.action == 'test':
-        test_normal(MainModel, params, expert_params, lm_params, words, test)
+        test_process(MainModel, params, expert_params, lm_params, words, test)
 
     elif args.action == 'rl':
         main_model = MainModel(words, params, expert_params, lm_params)
