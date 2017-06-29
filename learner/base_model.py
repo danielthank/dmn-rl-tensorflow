@@ -624,12 +624,18 @@ class BaseModel(object):
         qs = np.array(qs).reshape((batch_size, -1))
         qs = np.insert(qs, qs.shape[1], self.lm_word_to_id['<eos>'], axis=1)
 
+        ## get sequence length , <eos> is 0##
+        seq_mask = np.sign(np.abs(qs))
+        length = np.sum(seq_mask, axis=1)
+        #print('current question length: {}'.format(length[0]))
+
         ## form standard LMDataSet ##
         from lm.lm_helper import LMDataSet
         assert self.lm.params.lm_num_steps == 1
         qs = LMDataSet(batch_size, self.lm.params.lm_num_steps, qs.ravel())
         _, log_perps, iters = self.lm.eval(qs, self.lm.params.action)
-        perp = np.exp(np.sum(log_perps, axis=1) / iters)
+        log_perps *= seq_mask[:, :-1]
+        perp = np.exp(np.sum(log_perps, axis=1) / length)
         return perp
 
 
