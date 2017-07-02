@@ -351,11 +351,12 @@ class BaseModel(object):
                 tmp = indx[j * params.batch_size: (j+1) * params.batch_size]
             else:
                 tmp = indx[j * params.batch_size: mem_length]
-            QA_summ, QA_global_step, _ = self.QA_train_batch((QA_x_mem[tmp],
+            QA_summ, QA_var_summ,QA_global_step, _ = self.QA_train_batch((QA_x_mem[tmp],
                                                               QA_q_mem[tmp],
                                                               QA_y_mem[tmp]),
                                                              re)
             self.summary_writer.add_summary(QA_summ, QA_global_step)
+            self.summary_writer.add_summary(QA_var_summ, QA_global_step)
             # tot_QA_loss.append(QA_loss)
             # tot_QA_acc.append(acc)
         # return QA_summ, QA_global_step, tot_QA_loss, tot_QA_acc
@@ -522,8 +523,11 @@ class BaseModel(object):
             data_set = [data_set]
         tot_loss = []
         tot_QA_acc = []
+        tot_num_corrects = []
+        length = 0
         for data in data_set :
             num_batches = data.get_batch_num(full_batch=False)
+            length += data.count
             for _ in range(num_batches):
                 batch = data.next_batch(full_batch=False)
                 if name == 'pre':
@@ -534,8 +538,9 @@ class BaseModel(object):
                     QA_summ, QG_summ, QA_global_step, RL_global_step, loss = self.rl_test_batch(batch)
                     global_step = RL_global_step
                 elif name == 'QA':
-                    QA_summ, QA_global_step, loss, acc = self.QA_test_batch(batch)
-                
+                    QA_summ, QA_global_step, loss, acc, num_correct = self.QA_test_batch(batch)
+               
+                tot_num_corrects.append(num_correct)
                 tot_QA_acc.append(acc)
                 tot_loss.append(loss)
                 data.reset()
@@ -543,7 +548,7 @@ class BaseModel(object):
         if not name == 'QA':
             self.validation_summary_writer.add_summary(QG_summ, global_step)
             return np.mean(tot_loss)
-        return np.mean(tot_loss), np.mean(tot_QA_acc)
+        return np.mean(tot_loss), np.sum(tot_num_corrects)/length
 
     def save(self, step):
         assert not self.action == 'test'

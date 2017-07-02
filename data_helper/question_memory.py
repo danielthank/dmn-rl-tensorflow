@@ -17,6 +17,7 @@ class QuestionMemory():
             return
         if not self.full and self.idx+num >= self.max_len:
             self.full = True
+        
         if num > self.max_len:
             choice = np.random.choice(num, self.max_len, replace=False)
             self.buffer = questions[choice]

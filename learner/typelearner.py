@@ -2,6 +2,8 @@ import os
 import json
 import random
 import numpy as np
+import math
+import pickle
 import gc
 #gc.set_debug(gc.DEBUG_STATS)
 
@@ -75,32 +77,36 @@ class TypeSelect(BaseModel):
             self.sess.run(self.init_op)
 
         ## summary writer##
-        if not self.action == 'test':
-            self.task_summary_writers = {'train':[],'test':[]}
-            for i in range(params.action_num+1):
-                if i != params.action_num :
-                    task_summary_dir = os.path.join(self.save_dir,'task_%d'%(i+1))
-                    test_task_summary_dir = os.path.join(self.save_dir,'test_task_%d'%(i+1))
-                else:
-                    task_summary_dir = os.path.join(self.save_dir,'terminate')
-                    test_task_summary_dir = os.path.join(self.save_dir,'test_terminate')
-                self.task_summary_writers['train'].append(tf.summary.FileWriter(logdir=task_summary_dir,graph=self.sess.graph))
-                self.task_summary_writers['test'].append(tf.summary.FileWriter(logdir=test_task_summary_dir,graph=self.sess.graph))
-            
-            self.summary_dir = os.path.join(self.save_dir, 'train_summary')
-            self.validation_summary_dir = os.path.join(self.save_dir, 'train_validation_summary')
-            self.var_summary_dir = os.path.join(self.save_dir, 'train_var_summary')
-            self.summary_writer = tf.summary.FileWriter(logdir=self.summary_dir,graph=self.sess.graph)
-            self.validation_summary_writer = tf.summary.FileWriter(logdir=self.validation_summary_dir,
-                                                                   graph=self.sess.graph)
-            self.var_summary_writer = tf.summary.FileWriter(logdir=self.var_summary_dir, graph=self.sess.graph)
+        #if not self.action == 'test':
+        self.task_summary_writers = {'train':[],'test':[]}
+        for i in range(params.action_num+1):
+            if i != params.action_num :
+                task_summary_dir = os.path.join(self.save_dir,'task_%d'%(i+1))
+                test_task_summary_dir = os.path.join(self.save_dir,'test_task_%d'%(i+1))
+            else:
+                task_summary_dir = os.path.join(self.save_dir,'terminate')
+                test_task_summary_dir = os.path.join(self.save_dir,'test_terminate')
+            self.task_summary_writers['train'].append(tf.summary.FileWriter(logdir=task_summary_dir,graph=self.sess.graph))
+            self.task_summary_writers['test'].append(tf.summary.FileWriter(logdir=test_task_summary_dir,graph=self.sess.graph))
+        
+        self.summary_dir = os.path.join(self.save_dir, 'train_summary')
+        self.test_summary_dir = os.path.join(self.save_dir, 'test_summary')
+        self.validation_summary_dir = os.path.join(self.save_dir, 'train_validation_summary')
+        self.var_summary_dir = os.path.join(self.save_dir, 'train_var_summary')
+        
+        self.summary_writer = tf.summary.FileWriter(logdir=self.summary_dir,graph=self.sess.graph)
+        self.test_summary_writer = tf.summary.FileWriter(logdir=self.test_summary_dir,graph=self.sess.graph)
+        self.validation_summary_writer = tf.summary.FileWriter(logdir=self.validation_summary_dir,
+                                                               graph=self.sess.graph)
+        self.var_summary_writer = tf.summary.FileWriter(logdir=self.var_summary_dir, graph=self.sess.graph)
 
         ## reward baseline ##
         self.baseline = 0.
 
         ## define session run lists ##
         self.def_run_list()
-
+        self.initial = False
+        
     def build(self, forward_only):
         self.DQN_global_step = tf.Variable(0,name='DQN_global_step',trainable=False)
         params = self.params
@@ -158,36 +164,91 @@ class TypeSelect(BaseModel):
                 QA_accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
             tf.summary.scalar('loss', QA_total_loss, collections=["QA_SUMM"])
             tf.summary.scalar('accuracy', QA_accuracy, collections=["QA_SUMM"])
-            
-        
-        with tf.variable_scope('type_selector', initializer=tf.contrib.layers.xavier_initializer()):
+            QA_state_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA')]
+            variable_summary(QA_state_vars,["QA_VAR_SUMM"])
+
+        with tf.variable_scope('type_selector', initializer=tf.contrib.layers.xavier_initializer()) :
             all_QA_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA')]
-            QA_decoder_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA')]
+            QA_state_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA')]
             for var in all_QA_vars:
                 print ('name: ',var.name)
                 print ('shape: ',var.shape)
             #sys.exit()
-            QA_decoder_var_num = sum([reduce((lambda x,y:x*y),var.shape.as_list()) for var in QA_decoder_vars])
-            print ('QA_var_num:%d'%QA_decoder_var_num)
+            QA_state_var_num = sum([reduce((lambda x,y:x*y),var.shape.as_list()) for var in QA_state_vars])
+            print ('QA_var_num:%d'%QA_state_var_num)
             self.QA_var_reset = tf.variables_initializer(all_QA_vars)
 
-            with tf.name_scope('DQN') :
-                state = tf.placeholder(tf.float32,shape=[None,QA_decoder_var_num],name='leaner_state')
+            with tf.name_scope('DQN') as scope :
+                ## DQN setting 
+                self.state_mode = 'QA_var action'
+                self.other_state_size = 0
+                self.var_state_size = 0
+                if 'QA_var' in self.state_mode:
+                    self.var_state_size += QA_state_var_num
+                
+                if 'action_record' in self.state_mode:
+                    self.other_state_size += params.action_num + 1
+
+                if 'last_action' in self.state_mode:
+                    self.other_state_size += params.action_num + 1
+
+                if 'last_reward' in self.state_mode:
+                    self.other_state_size += 1
+                
+                if 'acc' in self.state_mode:
+                    self.other_state_size += 1
+                
+                print ('state mode : %s'%self.state_mode)
+                print ('var state size : %d'%self.var_state_size)
+                print ('other state size : %d'%self.other_state_size)
+               
+                var_state = tf.placeholder(tf.float32,shape=[None,self.var_state_size],name='var_state')
+                self.var_state_summary = tf.summary.histogram('var_state',var_state)
+                
+                other_state = tf.placeholder(tf.float32,shape=[None,self.other_state_size],name='other_state')
                 actions = tf.placeholder(tf.float32,shape=[None,params.action_num+1],name='learner_actions')
                 target_Q_value = tf.placeholder(tf.float32,shape=[None],name='target_Q_values')
+               
+                with tf.name_scope('var_state_function'):
+                    small_var_state = tf.layers.dense(var_state,1024,activation=tf.nn.relu,name='state_function_1')
+                    small_var_state = tf.layers.dense(small_var_state,1024,activation=tf.nn.relu,name='state_function_2')
+                    small_var_state = tf.layers.dense(small_var_state,1024,name='state_function_output')
                 
-                fc = tf.layers.dense(state,1024)
-                fc = tf.nn.relu(fc)
-                fc = tf.layers.dense(fc,128)
-                fc = tf.nn.relu(fc)
-                Q_values = tf.layers.dense(fc,params.action_num+1) 
+                with tf.name_scope('var_state_reconstruct'):
+                    reconstruct = tf.layers.dense(small_var_state,1024,activation=tf.nn.relu,name='reconstruct_1')
+                    reconstruct = tf.layers.dense(reconstruct,1024,activation=tf.nn.relu,name='reconstruct_2')
+                    reconstruct = tf.layers.dense(reconstruct,self.var_state_size,name='reconstruct_output')
+               
+                small_var_state = tf.layers.dense(small_var_state,128,activation=tf.nn.relu)
+                if self.var_state_size != 0 and self.other_state_size != 0:
+                    merge = tf.concat([small_var_state,other_state],1)
+                elif self.var_state_size != 0:
+                    merge = small_var_state
+                elif self.other_state_size != 0:
+                    merge = other_state
+                
+                fc = tf.layers.dense(merge,128,activation=tf.nn.relu)
+                Q_values = tf.layers.dense(fc,params.action_num+1,name='Q_value_output') 
 
                 action_Q_value = tf.reduce_sum(tf.multiply(Q_values,actions),reduction_indices=1)
                 max_Q_value = tf.reduce_max(Q_values,axis=-1)
+                variables = [v for v in tf.trainable_variables() if v.name.startswith('type_selector')]
+                variable_summary(variables,['DQN_VAR_SUMM'])
            
             with tf.name_scope('Loss'):
-                DQN_loss = tf.reduce_mean(tf.square(action_Q_value-target_Q_value))
-            tf.summary.scalar('DQN_loss',DQN_loss,collections=['DQN_SUMM']) 
+                Q_value_loss = tf.reduce_mean(tf.square(action_Q_value-target_Q_value))
+               '''
+               #reconstruct_loss = tf.reduce_mean(tf.reduce_sum(tf.square(reconstruct-var_state),1))
+                #reconstruct_loss = tf.reduce_mean(tf.reduce_sum(tf.abs(reconstruct-var_state),1))
+                if self.var_state_size != 0:
+                    DQN_loss = Q_value_loss + 0.1*reconstruct_loss
+                else:
+                    DQN_loss = Q_value_loss
+                '''
+                DQN_loss = Q_value_loss
+                tf.summary.scalar('Q_value_loss',Q_value_loss,collections=['DQN_SUMM']) 
+                tf.summary.scalar('reconstruct_loss',reconstruct_loss,collections=['DQN_SUMM']) 
+                tf.summary.scalar('DQN_loss',DQN_loss,collections=['DQN_SUMM']) 
         
         with tf.variable_scope('Episode', initializer=tf.contrib.layers.xavier_initializer()):
             self.QA_local_step = tf.Variable(0,name='QA_local_step',trainable=False)
@@ -196,8 +257,10 @@ class TypeSelect(BaseModel):
             self.QA_global_step_update = tf.assign(self.QA_global_step,self.QA_global_step+self.QA_local_step)
           
             self.epsilon = tf.placeholder(tf.float32,shape=(),name='epsilon')
+            self.temperature = tf.placeholder(tf.float32,shape=(),name='temperature')
             self.final_acc = tf.placeholder(tf.float32,shape=(),name='final_acc')
             tf.summary.scalar('epsilon',self.epsilon,collections=['EPISODE_SUMM'])
+            tf.summary.scalar('temperature',self.temperature,collections=['EPISODE_SUMM'])
             tf.summary.scalar('final_acc',self.final_acc,collections=['EPISODE_SUMM'])
             
             self.num_action = tf.placeholder(tf.int32,shape=(),name='num_action')
@@ -227,7 +290,8 @@ class TypeSelect(BaseModel):
         self.feed_previous = feed_previous
 
         # type selector placeholders
-        self.state = state
+        self.var_state = var_state
+        self.other_state = other_state
         self.actions = actions
         self.target_Q_value = target_Q_value
 
@@ -238,8 +302,8 @@ class TypeSelect(BaseModel):
         
         # variables of QA
         self.all_QA_vars = all_QA_vars
-        self.QA_decoder_vars = QA_decoder_vars
-        self.QA_decoder_var_num = QA_decoder_var_num
+        self.QA_state_vars = QA_state_vars
+        self.QA_state_var_num = QA_state_var_num
         
         # QA output tensors
         self.QA_ans_logits = QA_ans_logits
@@ -247,18 +311,19 @@ class TypeSelect(BaseModel):
         self.QA_total_loss = QA_total_loss
         self.num_corrects = num_corrects
         self.QA_accuracy = QA_accuracy
-
+        self.QA_num_corrects = num_corrects
         # optimizer ops
-        if not forward_only:
-            rl_l_rate = self.params.rl_learning_rate
-            l_rate = self.params.learning_rate
-            self.QA_opt_op = create_opt('QA_opt', self.QA_total_loss, l_rate, self.QA_local_step)
-            self.DQN_opt_op = create_opt('DQN_opt',self.DQN_loss,l_rate,self.DQN_global_step,clip=10.)
+        l_rate = self.params.learning_rate
+        self.QA_opt_op = create_opt('QA_opt', self.QA_total_loss, l_rate, self.QA_local_step,clip=5.)
+        #if not forward_only:
+        rl_l_rate = self.params.rl_learning_rate
+        self.DQN_opt_op = create_opt('DQN_opt',self.DQN_loss,rl_l_rate,self.DQN_global_step,clip=10.)
 
         # merged summary ops
         self.merged_QA = tf.summary.merge_all(key='QA_SUMM')
-        self.merged_VAR = tf.summary.merge_all(key='VAR_SUMM')
+        self.merged_QA_VAR = tf.summary.merge_all(key='QA_VAR_SUMM')
         self.merged_DQN = tf.summary.merge_all(key='DQN_SUMM')
+        self.merged_DQN_VAR = tf.summary.merge_all(key='DQN_VAR_SUMM')
         self.merged_ACTION = tf.summary.merge_all(key='ACTION_SUMM')
         self.merged_TASK_ACTION = tf.summary.merge_all(key='TASK_ACTION_SUMM')
         self.merged_EPISODE = tf.summary.merge_all(key='EPISODE_SUMM')
@@ -302,7 +367,7 @@ class TypeSelect(BaseModel):
                     QA_y_mem.append(ans)
                 else:         
                     ## get reward
-                    reward = self.get_DQN_reward(action,val_data,QA_x_mem,QA_q_mem,QA_y_mem)
+                    reward,converge_time = self.get_DQN_reward(action,val_data,QA_x_mem,QA_q_mem,QA_y_mem)
                     print ('episode %d terminate, acc=%f'%(episo,self.acc))
 
             ## write episode summary
@@ -320,191 +385,217 @@ class TypeSelect(BaseModel):
             tf.reset_default_graph() 
             #gc.collect()
     ''' 
-    def train(self, train_data,val_data):    
+    def initial_environment(self,max_action,sample_num,memory_size):
         params = self.params
-        assert self.action is not 'test'
-        max_action = 3
-        episode = 500
-        memory_size = 10000 
-        sample_num = 256
-        ## QA training memory, should be reset every episoode
-        QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), max_action*sample_num, dtype='int32')
-        QA_q_mem = QuestionMemory((params.question_size,), max_action*sample_num, dtype='int32')
-        QA_y_mem = QuestionMemory((), max_action*sample_num, dtype='int32')
+       
+        if not self.initial :
+            self.sess.run(self.action_global_step.assign(0))
+            ## QA training memory, should be reset every episoode
+            self.QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), max_action*sample_num, dtype='int32')
+            self.QA_q_mem = QuestionMemory((params.question_size,), max_action*sample_num, dtype='int32')
+            self.QA_y_mem = QuestionMemory((), max_action*sample_num, dtype='int32')
+            
+            self.tmp_QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), sample_num, dtype='int32')
+            self.tmp_QA_q_mem = QuestionMemory((params.question_size,), sample_num, dtype='int32')
+            self.tmp_QA_y_mem = QuestionMemory((), sample_num, dtype='int32')
+            ## DQN memory pool
+            self.dqn_memory_pool = DQNMemory([(self.var_state_size,),(self.other_state_size,)],params.action_num+1,memory_size)
+
+            self.initial = True
+    
+    def environment_reset(self):
+        params = self.params
+        ## reset QA memory
+        self.QA_x_mem.reset()
+        self.QA_q_mem.reset()
+        self.QA_y_mem.reset()
+
+        ## reset tmp QA memory
+        self.tmp_QA_x_mem.reset()
+        self.tmp_QA_q_mem.reset()
+        self.tmp_QA_y_mem.reset()
         
-        tmp_QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), sample_num, dtype='int32')
-        tmp_QA_q_mem = QuestionMemory((params.question_size,), sample_num, dtype='int32')
-        tmp_QA_y_mem = QuestionMemory((), sample_num, dtype='int32')
-        ## DQN memory pool
-        dqn_memory_pool = DQNMemory((self.QA_decoder_var_num,),params.action_num+1,memory_size)
+        ## initial QA variable
+        self.QA_reset()
+        
+        self.last_state = None
+        self.last_action = None
+        self.last_reward = None
+        self.action_record = np.zeros((params.action_num+1))
+        self.reward_record = np.zeros((params.action_num+1))
+
+    def train(self, train_data,val_data,learning_mode):    
+        params = self.params 
+        assert self.action is not 'test'
+        max_action = 15
+        episode = 300
+        memory_size = 10000 
+        #sample_num = params.batch_size
+        sample_num = 50
+
+        ## initial all memory
+        self.initial_environment(max_action,sample_num,memory_size) 
+        
         try:
             for episo in range(episode):
-                ## epsilon greedy
-                epsilon = 1/(1+episo/200)
-                if (episo+1)%10 == 0:
-                    self.test(train_data,val_data,max_action,sample_num,episo)
-                ## reset QA memory
-                QA_x_mem.reset()
-                QA_q_mem.reset()
-                QA_y_mem.reset()
+                ## reset environment
+                self.environment_reset()
                 
-                last_state = None
-                last_action = None
-                last_reward = None
-                action_record = np.zeros((params.action_num+1))
-                reward_record = np.zeros((params.action_num+1))
-                self.acc = 0
-                for it in range(max_action+1):
-                    print ('epsiode %d: action %d'%(episo,it),end='\r')
+                if learning_mode == 'epsilon_greedy':
+                    ## epsilon greedy
+                    epsilon = 1/(1+episo/200)
+                elif learning_mode == 'soft_q':
+                    ## temperature
+                    T = max(100*0.4**(episo//50),0.1)
+                
+                if (episo+1)%10 == 0:
+                    print ('Train DQN on all memory')
+                    for _ in range(10):
+                        self.DQN_train(num_batch = 'all')
+                    self.test(train_data,val_data,max_action,sample_num,episo,learning_mode)
+                
+                                
+                _,self.acc = self.eval(val_data,name='QA')
+                print ('episode %d========================'%episo)
+                print ('initial acc : %f'%self.acc)
+                for it in range(max_action):
+                    print ('    action %d'%(it),end='')
                     ## get learner QA variables value(learner state)
-                    QA_decoder_vars_value = self.sess.run(self.QA_decoder_vars)
-                    learner_state = np.zeros(0,'float32')
-                    for value in QA_decoder_vars_value:
-                        learner_state = np.append(learner_state,value)
+                    learner_state = self.get_learner_state(self.last_action,self.last_reward,self.state_mode)
                     
-                    ## get action Q value 
-                    Q_values = self.sess.run(self.Q_values,feed_dict = {self.state:np.expand_dims(learner_state,axis=0)})
-                    Q_values = Q_values[0] 
+                    ## push observation into DQN memory pool
+                    self.dqn_pool_add(learner_state)
+
+                    ## get action and Q values
+                    action,Q_values = self.decide_action(learner_state,learning_mode,epsilon,T,False)
+                    print (', choose task %d'%(action+1),end='')
+                    self.action_record[action] += 1
                     
-                    ## decide action
-                    if it == max_action:
-                        action = params.action_num
-                    elif random.random() < epsilon: 
-                        action = random.randint(0,params.action_num-1)
-                    else:
-                        action = np.argmax(Q_values[:-1])
-                                                    
-                    action_record[action] += 1
                     ## sample questions from data set
                     if action != params.action_num:
                         contexts,questions,ans = train_data[action].get_random_cnt(sample_num)
-                        QA_x_mem.append(contexts)
-                        QA_q_mem.append(questions)
-                        QA_y_mem.append(ans)
-                        
-                        tmp_QA_x_mem.append(contexts)
-                        tmp_QA_q_mem.append(questions)
-                        tmp_QA_y_mem.append(ans)
-
-                        ## train QA
-                        for _ in range(3):
-                            QA_global_step = self.QA_train(tmp_QA_x_mem,tmp_QA_q_mem,tmp_QA_y_mem,num_batch = 'all')
+                        self.QA_x_mem.append(contexts)
+                        self.QA_q_mem.append(questions)
+                        self.QA_y_mem.append(ans)
+                        self.tmp_QA_x_mem.append(contexts)
+                        self.tmp_QA_q_mem.append(questions)
+                        self.tmp_QA_y_mem.append(ans)
                     
                     ## get reward
-                    reward = self.get_DQN_reward(action,val_data,QA_x_mem,QA_q_mem,QA_y_mem)
-                    reward_record[action] += reward
-                    
-                    if action == params.action_num:
-                        print ('episode %d terminate, acc=%f'%(episo,self.acc))
-                        print (action_record)
+                    if it == max_action-1 or action == params.action_num:
                         terminate = 0
                     else:
-                        terminate= 1
-                        self.write_action_summary('train',Q_values,action,reward)
-                    ## push observation into DQN memory pool
-                    if last_state is not None and last_action is not None:
-                        dqn_memory_pool.append(last_state,last_action,last_reward,learner_state,last_terminate)
-                    last_state = learner_state
-                    last_action = action
-                    last_reward = reward 
-                    last_terminate = terminate
+                        terminate = 1
+                    reward,converge_time = self.get_DQN_reward(action,val_data,terminate)
+
+                    self.reward_record[action] += reward               
+                    print (', reward %f'%(reward),end='')
+                    print (', acc %f'%(self.acc))
+                    print ('    converge after %d times training'%converge_time)
+                    self.write_action_summary('train',Q_values,action,reward)
+                    
                     ## memory replay
-                    if dqn_memory_pool.size > 2*max_action and dqn_memory_pool.size > params.batch_size and dqn_memory_pool.total_append_size % 50 == 0:
-                        self.DQN_train(dqn_memory_pool,num_batch = 5)
+                    if (self.dqn_memory_pool.size > 5*max_action or episo > 20) and self.dqn_memory_pool.size%10 == 0:
+                        self.DQN_train(dqn_memory_pool,num_batch = 1)
+
                     if terminate == 0:
                         break
-                assert terminate == 0
+
+                    self.last_state = learner_state
+                    self.last_action = action
+                    self.last_reward = reward 
+                    self.last_terminate = terminate
+                
+                assert terminate == 0    
                 dqn_memory_pool.append(learner_state,action,reward,learner_state,terminate)
+                print ('episode %d terminate, acc=%f'%(episo,self.acc))
+                print (self.action_record)
                 
                 ## write episode summary
-                self.write_episode_summary('train',action_record,reward_record,epsilon,episo)
-                
-                ## reset QA model
-                self.sess.run([self.QA_var_reset,self.QA_global_step_update])
+                if learning_mode == 'epsilon_greedy':
+                    self.write_episode_summary('train',learning_mode,epsilon,episo)
+                elif learning_mode == 'soft_q': 
+                    self.write_episode_summary('train',learning_mode,T,episo)
+
+                self.sess.run([self.QA_global_step_update])
                 self.sess.run([self.QA_local_step_reset])
                 tf.reset_default_graph() 
-                #gc.collect()
+                gc.collect()
+        
         except KeyboardInterrupt:
             print ('KeyboardInterrupt')
             self.save_params()
         finally:
+            #self.save_dqn_memory(dqn_memory_pool)
             self.save(episo)
     
-    def test(self,train_data,val_data,max_action,sample_num,episo):
+    def test(self,train_data,val_data,max_action,sample_num,episo,learning_mode):
         params = self.params
-        ## QA training memory, should be reset every episoode
-        QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), max_action*sample_num, dtype='int32')
-        QA_q_mem = QuestionMemory((params.question_size,), max_action*sample_num, dtype='int32')
-        QA_y_mem = QuestionMemory((), max_action*sample_num, dtype='int32')
+        self.initial_environment(max_action,sample_num,0) 
+        self.environment_reset()
         
-        tmp_QA_x_mem = QuestionMemory((params.story_size, params.sentence_size), sample_num, dtype='int32')
-        tmp_QA_q_mem = QuestionMemory((params.question_size,), sample_num, dtype='int32')
-        tmp_QA_y_mem = QuestionMemory((), sample_num, dtype='int32')
-        
-        ## reset QA memory
-        QA_x_mem.reset()
-        QA_q_mem.reset()
-        QA_y_mem.reset()
-        
-        action_record = np.zeros((params.action_num+1))
-        reward_record = np.zeros((params.action_num+1))
-        self.acc = 0
-        print ('testing =========================')
-        for it in range(max_action+1):
+        T = 0.05
+        _,self.acc = self.eval(val_data,name='QA')
+        print ('testing =========================[ episode %i ]'%episo)
+        print ('initial acc : %f'%self.acc)
+        for it in range(max_action):
+            print ('=== [ action %i ] ==='%it)
             ## get learner QA variables value(learner state)
-            QA_decoder_vars_value = self.sess.run(self.QA_decoder_vars)
-            learner_state = np.zeros(0,'float32')
-            for value in QA_decoder_vars_value:
-                learner_state = np.append(learner_state,value)
-            
-            ## get action Q value 
-            Q_values = self.sess.run(self.Q_values,feed_dict = {self.state:np.expand_dims(learner_state,axis=0)})
-            Q_values = Q_values[0] 
-            
+            learner_state = self.get_learner_state(self.last_action,self.last_reward,self.state_mode)
+
+            feed_list  = [self.var_state_summary,self.action_global_step]
+            feed_dict = {self.var_state:np.expand_dims(learner_state[0],axis=0)}
+            var_state_histogram, action_step = self.sess.run(feed_list,feed_dict=feed_dict)
+            self.test_summary_writer.add_summary(var_state_histogram,action_step)
+    
             ## decide action
-            if it == max_action:
-                action = params.action_num
-                print ('action %d, choose terminate')
-            else:
-                action = np.argmax(Q_values[:-1])
-                print ('action %d, choose task %d'%(it,action+1))
-                                            
-            action_record[action] += 1
-            
+            action,Q_values = self.decide_action(learner_state,learning_mode,0,T,True)
+            print ('choose task %d'%(action+1),end='')
+            self.action_record[action] += 1
+           
             ## sample questions from data set
             if action != params.action_num:
                 contexts,questions,ans = train_data[action].get_random_cnt(sample_num)
-                QA_x_mem.append(contexts)
-                QA_q_mem.append(questions)
-                QA_y_mem.append(ans)
+                self.QA_x_mem.append(contexts)
+                self.QA_q_mem.append(questions)
+                self.QA_y_mem.append(ans)
                 
-                tmp_QA_x_mem.append(contexts)
-                tmp_QA_q_mem.append(questions)
-                tmp_QA_y_mem.append(ans)
+                self.tmp_QA_x_mem.append(contexts)
+                self.tmp_QA_q_mem.append(questions)
+                self.tmp_QA_y_mem.append(ans)
 
-                ## train QA
-                for _ in range(3):
-                    QA_global_step = self.QA_train(tmp_QA_x_mem,tmp_QA_q_mem,tmp_QA_y_mem,num_batch = 'all')
-            
             ## get reward
-            reward = self.get_DQN_reward(action,val_data,QA_x_mem,QA_q_mem,QA_y_mem)
-            reward_record[action] += reward
-            
-            if action == params.action_num:
-                print ('testing, acc=%f'%(self.acc))
-                print (action_record)
+            if action == params.action_num or it == max_action-1:
                 terminate = 0
-            else:
+            else:        
                 terminate= 1
-                self.write_action_summary('test',Q_values,action,reward)
             
+            reward,converge_time = self.get_DQN_reward(action,val_data,terminate)
+            
+            self.reward_record[action] += reward
+            print (', reward %f'%(reward),end='')
+            print (', acc %f'%(self.acc))
+            print ('converge after %d times training'%converge_time)
+            self.write_action_summary('test',Q_values,action,reward)
+
+           
+            self.last_action = action
+            self.last_reward = reward
+            self.last_state = learner_state
             if terminate == 0:
                 break
         assert terminate == 0
+        print ('testing, acc=%f'%(self.acc))
+        print (self.action_record)
         
         print ('testing end======================')
         ## write episode summary
-        self.write_episode_summary('test',action_record,reward_record,0,episo)
+        if learning_mode == 'epsilon_greedy':
+            self.write_episode_summary('test',learning_mode,0,episo)
+        elif learning_mode == 'soft_q':
+            self.write_episode_summary('test',learning_mode,T,episo)
+        elif learning_mode == 'random':
+            self.write_episode_summary('test',learning_mode,0,episo)
         
         ## reset QA model
         self.sess.run([self.QA_var_reset,self.QA_global_step_update])
@@ -512,37 +603,136 @@ class TypeSelect(BaseModel):
         tf.reset_default_graph() 
         #gc.collect()
 
-        
-    def DQN_train(self,dqn_memory_pool,num_batch):
+    def dqn_pool_add(self,new_state):    
+        if self.last_state is not None and self.last_action is not None:
+            self.dqn_memory_pool.append(self.last_state,self.last_action,self.last_reward,new_state,self.last_terminate)
+    
+    def DQN_train(self,num_batch):
         params = self.params
+        dqn_memory_pool = self.dqn_memory_pool
         assert not self.action == 'test'
         discount = 0.8
-        index = np.arange(dqn_memory_pool.size)
+        size = dqn_memory_pool.size
+        batch_size = params.batch_size
+        if num_batch == 'all' or size < num_batch * batch_size:
+            num_batch = math.ceil(size/batch_size)
+        
+        index = np.arange(size)
+        np.random.shuffle(index)
         for i in range(num_batch):
-            chosen_memory = np.random.choice(index,params.batch_size) 
+            if (i+1)*batch_size < size:
+                chosen_memory = index[i*batch_size:(i+1)*batch_size]
+            else:
+                chosen_memory = index[i*batch_size:size]
+
             states,one_hot_actions,rewards,next_states,terminates = dqn_memory_pool[chosen_memory]
             
             ## get max Q value of next state
-            max_Q_value = self.sess.run(self.max_Q_value,feed_dict = {self.state:next_states}) # [N]
+            max_Q_value = self.sess.run(self.max_Q_value,feed_dict = {self.var_state:next_states[0],
+                                                                      self.other_state:next_states[1]}) # [N]
             
             ## get target value Q(s,a) <- Q(s,a) + lr*( r + discount * max Q(s',a') - Q(s,a))
             #target_Q_value = (1-lr)*Q_value_action + lr*(rewards + discount*max_Q_value * terminates)
             target_Q_value = rewards + discount*max_Q_value * terminates
-            DQN_summ,DQN_global_step,_ = self.sess.run(self.DQN_train_list,
-                                                       feed_dict = {self.state:states,
+            DQN_summ,DQN_VAR_summ,DQN_global_step,_ = self.sess.run(self.DQN_train_list,
+                                                       feed_dict = {self.var_state:states[0],
+                                                                    self.other_state:states[1],
                                                                     self.actions:one_hot_actions,
                                                                     self.target_Q_value:target_Q_value})
             self.summary_writer.add_summary(DQN_summ, DQN_global_step)
-   
-    def get_DQN_reward(self,action,val_data,QA_x_mem,QA_q_mem,QA_y_mem):
+            self.var_summary_writer.add_summary(DQN_VAR_summ, DQN_global_step)
+    
+    def get_learner_state(self,last_action,last_reward,state_mode): 
+        params = self.params 
+        
+        var_state = np.zeros(0,'float32')
+        other_state = np.zeros(0,'float32')
+        
+        if 'QA_var' in state_mode:
+            QA_state_vars_value = self.sess.run(self.QA_state_vars)
+            for value in QA_state_vars_value:
+                var_state = np.append(var_state,value)
+        
+        if 'action_record' in state_mode:
+            other_state = np.append(other_state,self.action_record)             
+
+        if 'last_action' in state_mode:
+            one_hot_last_action = np.zeros(params.action_num+1)
+            if last_action is not None:
+                one_hot_last_action[last_action]=1
+            other_state = np.append(other_state,one_hot_last_action)
+
+        if 'last_reward' in state_mode:
+            if last_reward is not None:
+                other_state = np.append(other_state,last_reward)
+            else:
+                other_state = np.append(other_state,0)
+        if 'acc' in state_mode :
+            other_state = np.append(other_state,self.acc)
+        return [var_state,other_state]
+
+    def decide_action(self,state,learning_mode,epsilon,T,verbose=False):
+        params = self.params
+        ## get action Q value 
+        Q_values = self.sess.run(self.Q_values,feed_dict = {self.var_state:np.expand_dims(state[0],axis=0),
+                                                            self.other_state:np.expand_dims(state[1],axis=0)})
+        Q_values = Q_values[0]
+        
+        if verbose :
+            print ('Q_value : ',Q_values)                                
+        ## decide action
+        if learning_mode == 'epsilon_greedy':
+            if random.random() < epsilon : 
+                action = random.randint(0,params.action_num)
+            else:
+                action = np.argmax(Q_values)
+        elif learning_mode == 'soft_q': 
+            q = Q_values/T
+            q -= np.max(q)
+            p = np.exp(q)
+            p /= np.sum(p)
+            action = np.random.choice(params.action_num+1,1,p=p)[0]
+            if verbose:
+                print ('probability : ',p)
+        elif learning_mode == 'random':
+            action = np.random.choice(params.action_num)
+        else:
+            raise Exception('unknown learning mode %s'%learning_mode)
+
+        return action,Q_values
+
+    def QA_reset(self):
+        self.sess.run([self.QA_var_reset])
+    
+    def get_DQN_reward(self,action,val_data,terminate):
         params = self.params
 
+        converge_time = 0
+        tolerance = 10
+
+        if terminate == 0:
+            QA_x_mem = self.QA_x_mem
+            QA_q_mem = self.QA_q_mem
+            QA_y_mem = self.QA_y_mem
+        elif terminate == 1:
+            QA_x_mem = self.QA_x_mem
+            QA_q_mem = self.QA_q_mem
+            QA_y_mem = self.QA_y_mem
+            '''
+            QA_x_mem = self.tmp_QA_x_mem
+            QA_q_mem = self.tmp_QA_q_mem
+            QA_y_mem = self.tmp_QA_y_mem
+            '''
+
+
+        '''
         if action == params.action_num and len(QA_x_mem) > 0:
             ## train QA until converge
-            max_QA_acc = 0
+            max_QA_acc = self.acc
             count = 0
-            while count < 5:
+            while count < tolerance:
                 QA_global_step = self.QA_train(QA_x_mem,QA_q_mem,QA_y_mem,num_batch = 'all')
+                converge_time += 1
                 _,QA_acc = self.eval(val_data,name='QA')
             
                 if QA_acc > max_QA_acc:
@@ -553,54 +743,75 @@ class TypeSelect(BaseModel):
         else :
             _,max_QA_acc = self.eval(val_data,name='QA')
         '''
+        max_QA_acc = self.acc
         if len(QA_x_mem) > 0:
             ## train QA until converge
-            max_QA_acc = 0
             count = 0
-            while count < 5:
+            QA_vars = self.sess.run(self.all_QA_vars)
+            while count < tolerance:
                 QA_global_step = self.QA_train(QA_x_mem,QA_q_mem,QA_y_mem,num_batch = 'all')
+                converge_time += 1
                 _,QA_acc = self.eval(val_data,name='QA')
             
                 if QA_acc > max_QA_acc:
                     max_QA_acc = QA_acc
                     count = 0
+                    QA_vars = self.sess.run(self.all_QA_vars)
                 else:
                     count += 1
-        else :
-            _,max_QA_acc = self.eval(val_data,name='QA')
-        '''
+            for index,var in enumerate(self.all_QA_vars):
+                self.sess.run(tf.assign(var,QA_vars[index]))
         #_,max_QA_acc = self.eval(val_data,name='QA')
 
-        if action == params.action_num:
-            reward = max_QA_acc
-        else :
-            reward = max_QA_acc - self.acc
+        #if action == params.action_num:
+        #    reward = max_QA_acc
+        #else :
+        #    reward =0
+        reward = max_QA_acc - self.acc
         self.acc = max_QA_acc
-        
-        return reward
+    
+        '''
+        if action == self.last_action and reward < 1e-8:
+            reward = -0.1
+
+        reward += 0.05*(1 if action != params.action_num and self.action_record[action] == 1 else 0)
+        '''
+        return reward, max(converge_time-tolerance,0)
     
     def write_action_summary(self,name,Q_values,action,reward):
         params = self.params
         ## get action global step and selected action q value
         action_summ,action_global_step,_ = self.sess.run(self.action_summ_list,feed_dict={self.selected_action_q:Q_values[action],
                                                                                           self.reward:reward})
-        self.summary_writer.add_summary(action_summ,action_global_step) 
+        if name == 'train':
+            self.summary_writer.add_summary(action_summ,action_global_step) 
+        elif name == 'test':
+            self.test_summary_writer.add_summary(action_summ,action_global_step) 
         
         ## write Q value of each action(including terminate action)
         for i in range(params.action_num+1):
             task_action_summ = self.sess.run(self.task_action_summ_list,feed_dict={self.action_q:Q_values[i]})
             self.task_summary_writers[name][i].add_summary(task_action_summ,action_global_step)
     
-    def write_episode_summary(self,name,action_record,reward_record,epsilon,episode_step):
+    def write_episode_summary(self,name,learning_mode,explore_param,episode_step):
         params = self.params
         ## write epsilon and final accuracy
-        episode_summ = self.sess.run(self.episode_summ_list,feed_dict={self.epsilon:epsilon,
-                                                                  self.final_acc:self.acc})
-        self.summary_writer.add_summary(episode_summ,episode_step) 
+        if learning_mode == 'epsilon_greedy':
+            feed_dict = {self.epsilon:explore_param,self.final_acc:self.acc,self.temperature:0}
+        elif learning_mode == 'soft_q':
+            feed_dict = {self.temperature:explore_param,self.final_acc:self.acc,self.epsilon:0}
+        elif learning_mode == 'random':
+            feed_dict = {self.temperature:0,self.final_acc:self.acc,self.epsilon:0}
+        episode_summ = self.sess.run(self.episode_summ_list,feed_dict=feed_dict)
+        
+        if name == 'train':
+            self.summary_writer.add_summary(episode_summ,episode_step) 
+        elif name == 'test':
+            self.test_summary_writer.add_summary(episode_summ,episode_step) 
         ## write number of each action and average reward of each action
         for i in range(params.action_num+1):
-            num_action = action_record[i]
-            ave_reward = reward_record[i]/(action_record[i]+1e-9)
+            num_action = self.action_record[i]
+            ave_reward = self.reward_record[i]/(self.action_record[i]+1e-9)
             task_episode_summ = self.sess.run(self.task_episode_summ_list,feed_dict={self.num_action:num_action,
                                                                                      self.ave_reward:ave_reward})
             self.task_summary_writers[name][i].add_summary(task_episode_summ,episode_step)
@@ -752,9 +963,9 @@ class TypeSelect(BaseModel):
 
     def def_run_list(self):
         #self.pre_train_list = [self.merged_QA, self.merged_QG, self.Pre_global_step, self.Pre_opt_op]
-        self.QA_train_list  = [self.merged_QA, self.QA_current_global_step, self.QA_opt_op]
+        self.QA_train_list  = [self.merged_QA, self.merged_QA_VAR,self.QA_current_global_step, self.QA_opt_op]
         #self.QA_train_list  = [self.merged_QA, self.QA_global_step, self.QA_opt_op]
-        self.QA_test_list   = [self.merged_QA, self.reQA_global_step+self.QA_global_step+1000, self.QA_total_loss, self.QA_accuracy]
+        self.QA_test_list   = [self.merged_QA, self.reQA_global_step+self.QA_global_step+1000, self.QA_total_loss, self.QA_accuracy,self.QA_num_corrects]
         #self.rl_train_list  = [self.merged_RL, self.RL_global_step, self.RL_opt_op]
         #self.D_train_list   = [self.merged_D, self.D_global_step, self.D_opt_op]
 
@@ -762,7 +973,7 @@ class TypeSelect(BaseModel):
         #                       0.5*self.QA_total_loss+0.5*self.QG_total_loss]
         #self.rl_test_list   = [self.merged_QA, self.merged_QG, self.QA_global_step, self.QA_total_loss]
 
-        self.DQN_train_list = [self.merged_DQN,self.DQN_global_step,self.DQN_opt_op]
+        self.DQN_train_list = [self.merged_DQN,self.merged_DQN_VAR,self.DQN_global_step,self.DQN_opt_op]
         self.action_summ_list = [self.merged_ACTION,self.action_global_step,self.action_step_add_op]
         self.task_action_summ_list = self.merged_TASK_ACTION
         
@@ -779,6 +990,18 @@ class TypeSelect(BaseModel):
             self.feed_previous: feed_previous
         }
 
+    def save_dqn_memory(self,dqn_memory):
+        assert not self.action == 'test'
+        params = self.params
+        filename = os.path.join(self.save_dir, "dqn_memory.pickle")
+        with open(filename, 'wb') as f:
+            pickle.dump(dqn_memory, f)
+    
+    def load_dqn_memory(self,path):
+        with open(path,'rb') as file:
+            dqn_memory = pickle.load(file)
+        return dqn_memory
+    
     def save_params(self):
         assert not self.action == 'test'
         params = self.params

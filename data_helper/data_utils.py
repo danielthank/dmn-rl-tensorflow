@@ -71,7 +71,10 @@ class DataSet:
         return xs, qs, ys
 
     def get_random_cnt(self,cnt):
-        choices = np.random.choice(self.indexes,cnt)
+        inx = list(range(len(self.indexes)))
+        random.shuffle(inx)
+        inx = inx[:cnt]
+        choices = [self.indexes[i] for i in inx]
         xs = self.xs[choices]
         qs = self.qs[choices]
         ys = self.ys[choices]
@@ -118,7 +121,9 @@ class DataSet:
         self.current_index = 0
         if self.shuffle:
             np.random.shuffle(self.indexes)
-    
+    def size(self):
+        return self.count
+   
     def __getitem__(self, key):
         
         # do not (deep) copy data - just modify index list!
@@ -135,7 +140,7 @@ class DataSet:
             return val_set
         else:
             raise NotImplementedError
-
+        
        
 class WordTable:
     def __init__(self, word2vec=None, embed_size=0):

@@ -44,7 +44,7 @@ def load_params_dict(filename):
 parser = argparse.ArgumentParser(description='Expert-Learner dmn and ren')
 
 # Action and target and arch
-parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline', 'experiments_rl', 'experiments_nonrl','type_select'])
+parser.add_argument('action', choices=['train', 'test', 'rl', 'baseline', 'experiments_rl', 'experiments_nonrl','type_select','type_select_test'])
 parser.add_argument('target', choices=['expert', 'learner'])
 parser.add_argument('arch', choices=['dmn', 'seq2seq', 'ren','type'])
 
@@ -101,9 +101,8 @@ def main(_):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
             os.makedirs(save_dir+'/record', exist_ok=True)
-    elif args.action == 'type_select':
-        #assert args.task == 'all'
-        save_dir = os.path.join('save_type_select', '{}_{}'.format(args.arch, '_'.join(args.task)))
+    elif args.action == 'type_select' or args.action == 'type_select_test':
+        save_dir = os.path.join('save_type_select', '{}_{}'.format(args.action, '_'.join(args.task)))
         if not os.path.exists(save_dir):
             os.makedirs(save_dir, exist_ok=True)
         if not os.path.exists(save_dir+'/record'):
@@ -126,15 +125,17 @@ def main(_):
             task_list = [[int(i) for i in args.task]]
         for task in task_list:
             run_baseline(task, args, MainModel)
-    elif args.action == 'type_select':
-        args.action = 'train'
-        mode = 'train'
+    elif args.action == 'type_select' or args.action == 'type_select_test':
+        if args.action == 'type_select':
+            args.action = 'train'
+        else:
+            args.action = 'test'
         if 'all' in args.task:
             task_list = list(range(1,21))
         else:
             task_list = [int(i) for i in args.task]
 
-        run_type_select(task_list,args,MainModel,mode)
+        run_type_select(task_list,args,MainModel)
     elif args.action == 'experiments_rl':
         assert args.target == "learner", "RL Experiments can only run by a learner!"
         args.action = 'train'

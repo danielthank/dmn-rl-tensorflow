@@ -63,15 +63,15 @@ def weight(name, shape, init='he', range=None):
     tf.add_to_collection('l2', tf.nn.l2_loss(var))  # Add L2 Loss
     return var
 
-def variable_summary(vars):
+def variable_summary(vars,collections):
     #collections = ["PRE_SUMM", "QA_SUMM", "RL_SUMM"]
-    collections = ["VAR_SUMM"]
+    #collections = ["VAR_SUMM"]
     for var in vars:
         with tf.name_scope('summaries'):
-            mean = tf.reduce_mean(var)
+            mean = tf.reduce_mean(tf.abs(var))
             tf.summary.scalar('mean/' + var.name, mean, collections=collections)
             # tf.summary.scalar('stddev/' + var.name, tf.sqrt(tf.reduce_mean(tf.square(var - mean))), collections=collections)
-            tf.summary.histogram(var.name, var, collections=collections)
+            #tf.summary.histogram(var.name, var, collections=collections)
 
 def _get_dims(shape):
     fan_in = shape[0] if len(shape) == 2 else np.prod(shape[:-1])
