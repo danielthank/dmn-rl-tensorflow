@@ -171,6 +171,12 @@ class BaseModel(object):
 
     def get_question(self, feed_dict):
         q_probs, chosen_idxs = self.sess.run([self.q_probs, self.chosen_idxs], feed_dict=feed_dict)
+        for i in range(chosen_idxs.shape[0]):
+            for j in range(chosen_idxs.shape[1]):
+                if chosen_idxs[i][j] == -1:
+                    chosen_idxs[i][j] = feed_dict[self.q][i][j]
+        print(chosen_idxs)
+        print(q_probs)
         #q_idxs = np.argmax(np.stack(q_probs, axis=1), axis=2)
         # q_idxs = np.stack(chosen_idxs, axis=1)
         # assert q_idxs.shape == (self.params.batch_size, self.params.question_size)

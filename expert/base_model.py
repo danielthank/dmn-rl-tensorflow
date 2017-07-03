@@ -109,7 +109,8 @@ class BaseModel(object):
         min_loss = self.sess.run(self.min_validation_loss)
         print("Training %d epochs ..." % num_epochs)
         try:
-            for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
+            for epoch_no in range(num_epochs):
+            # for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
                 for _ in range(num_batches):
                     batch_good = train_data.get_batch_cnt(params.batch_size*4//5)
                     batch_bad = train_data.get_bad_batch_cnt(params.batch_size - params.batch_size*4//5, self.words.vocab_size)
@@ -123,7 +124,6 @@ class BaseModel(object):
                 train_data.reset()
 
                 if (epoch_no + 1) % params.acc_period == 0:
-                    tqdm.write("")  # Newline for TQDM
                     self.eval(train_data, name='Training')
 
                 if (epoch_no + 1) % params.val_period == 0:
@@ -168,8 +168,7 @@ class BaseModel(object):
         elif name == 'Test':
             self.test_acc = acc
 
-        tqdm.write("[%s] step %d, Loss = %.4f, Acc = %.4f" % \
-              (name, global_step, loss, acc))
+        print("[{}] step {}, Loss = {:.4f}, Acc = {:.4f}".format(name, global_step, loss, acc))
         return loss
 
     def save(self):

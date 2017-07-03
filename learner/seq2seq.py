@@ -185,18 +185,21 @@ class Seq2Seq(BaseModel):
 
     def QA_branch(self, embedding, qa_q, qa_story):
         params = self.params
-        q_cell = GRUCell(params.seq2seq_hidden_size)
-        num_layers = 1
         go_pad = tf.ones(tf.stack([self.batch_size]), dtype=tf.int32)
         with tf.device("/cpu:0"):
             go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
-        attention_mechanism = tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qa_story)
-        q_cell = tf.contrib.seq2seq.AttentionWrapper(
-            q_cell,
-            attention_mechanism
+        num_layers = 2
+        attn_cell = tf.contrib.seq2seq.AttentionWrapper(
+            GRUCell(params.seq2seq_hidden_size),
+            tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qa_story)
         )
-        initial_state = q_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size).clone(cell_state=qa_q)
-        output, _ = q_cell(go_pad, initial_state)
+        basic_cell = GRUCell(params.seq2seq_hidden_size)
+        multi_cell = MultiRNNCell([attn_cell, basic_cell])
+
+        initial_state = (attn_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size).clone(cell_state=qa_q),
+                         basic_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size))
+
+        output, _ = multi_cell(go_pad, initial_state)
         q_logprobs = tf.layers.dense(output, self.words.vocab_size)
         q_logprobs = tf.contrib.layers.batch_norm(q_logprobs, decay=0.9, is_training=self.is_training, center=True, scale=True,
                                                      updates_collections=None, scope='BatchNorm')
@@ -230,21 +233,26 @@ class Seq2Seq(BaseModel):
         # explore_eps = tf.cond(self.is_sample, explore_eps, tf.constant(0))
         tf.summary.scalar("explore_eps", explore_eps, collections=["VAR_SUMM"])
         ## question module rnn cell ##
-        q_cell = GRUCell(params.seq2seq_hidden_size)
-        q_cell = tf.contrib.seq2seq.AttentionWrapper(
-            q_cell,
+        attn_cell = tf.contrib.seq2seq.AttentionWrapper(
+            GRUCell(params.seq2seq_hidden_size),
             tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qg_story)
         )
+        basic_cell = GRUCell(params.seq2seq_hidden_size)
+        multi_cell = MultiRNNCell([attn_cell, basic_cell])
         decoder_helper = tf.contrib.seq2seq.ScheduledEmbeddingTrainingHelper(
             inputs=decoder_inputs,
             sequence_length=tf.constant([params.question_size] * params.batch_size),
             embedding=embedding,
-            sampling_probability=tf.constant(1.0)
+            sampling_probability=tf.constant(0.0)
         )
+
+        initial_state = (attn_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size).clone(cell_state=qg_story[:, -1]),
+                         basic_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size))
+
         decoder = tf.contrib.seq2seq.BasicDecoder(
-            cell=q_cell,
+            cell=multi_cell,
             helper=decoder_helper,
-            initial_state=q_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size).clone(cell_state=qg_story[:, -1]),
+            initial_state=initial_state,
             output_layer=Dense(self.words.vocab_size)
         )
         final_outputs, final_state, final_length = tf.contrib.seq2seq.dynamic_decode(
