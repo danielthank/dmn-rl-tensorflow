@@ -5,8 +5,6 @@ import json
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.layers import xavier_initializer
-from tqdm import tqdm
-
 
 def load_params_dict(filename):
     with open(filename, 'r') as file:

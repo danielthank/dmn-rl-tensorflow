@@ -1,7 +1,7 @@
 import math
 import tensorflow as tf
 from tensorflow.python.util import nest
-from tensorflow.contrib.rnn.python.ops.core_rnn_cell_impl import _linear as linear
+from tensorflow.python.ops.rnn_cell_impl import _linear as linear
 import numpy as np
 
 

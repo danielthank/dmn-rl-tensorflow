@@ -83,7 +83,7 @@ parser.add_argument('--gpu_fraction', default=0.5, type=float)
 parser.add_argument('--dmn_memory_step', default=3, type=int)
 parser.add_argument('--dmn_memory_update', default='relu')
 parser.add_argument('--dmn_embedding_size', default=80, type=int)
-parser.add_argument('--dmn_hidden_size', default=80, type=int)
+parser.add_argument('--dmn_hidden_size', default=50, type=int)
 parser.add_argument('--dmn_weight_decay', default=0.001, type=float)
 parser.add_argument('--dmn_keep_prob', default=1., type=float)
 parser.add_argument('--dmn_batch_norm', dest='dmn_batch_norm', action='store_true')
@@ -91,7 +91,7 @@ parser.add_argument('--no_dmn_batch_norm', dest='dmn_batch_norm', action='store_
 parser.set_defaults(dmn_batch_norm=True)
 
 # seq2seq params
-parser.add_argument('--seq2seq_hidden_size', default=150, type=int)
+parser.add_argument('--seq2seq_hidden_size', default=50, type=int)
 parser.add_argument('--seq2seq_weight_decay', default=0.001, type=float)
 
 # ren params
@@ -100,7 +100,7 @@ parser.add_argument('--ren_num_blocks', default=20, type=int)
 
 # RNNLM params
 parser.add_argument('--rnnlm_layers', default=2, type=int)
-parser.add_argument('--rnnlm_hidden_size', default=650, type=int)
+parser.add_argument('--rnnlm_hidden_size', default=50, type=int)
 parser.add_argument('--rnnlm_keep_prob', default=0.5, type=float)
 parser.add_argument('--lm_num_epoch', default=35, type=int)
 parser.add_argument('--lm_ptb_path', default='./ptb', type=str)

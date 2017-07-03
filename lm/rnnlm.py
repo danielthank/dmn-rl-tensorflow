@@ -127,6 +127,7 @@ class RNNLM(BaseModel):
             feed_dict[c] = state[i].c
             feed_dict[h] = state[i].h
         return feed_dict
+
     def save_params(self):
         assert self.action == 'train'
         params = self.params
