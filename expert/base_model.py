@@ -42,7 +42,6 @@ class BaseModel(object):
                     self.build(forward_only=False)
                 elif self.action == 'test':
                     self.build(forward_only=True)
-                self.merged = tf.summary.merge_all()
                 self.init_op = tf.global_variables_initializer()
 
         ## init saver ##
@@ -81,7 +80,7 @@ class BaseModel(object):
         raise NotImplementedError()
 
     def train_batch(self, feed_dict):
-        train_list = [self.merged, self.opt_op, self.global_step]
+        train_list = [self.merged_TRAIN, self.opt_op, self.global_step]
         return self.sess.run(train_list, feed_dict=feed_dict)
 
     def test_batch(self, feed_dict):
@@ -111,7 +110,8 @@ class BaseModel(object):
         try:
             for epoch_no in range(num_epochs):
             # for epoch_no in tqdm(range(num_epochs), desc='Epoch', maxinterval=86400, ncols=100):
-                for _ in range(num_batches):
+                for z in range(num_batches):
+                    print('[{}/{}]'.format(z, num_batches))
                     batch_good = train_data.get_batch_cnt(params.batch_size*4//5)
                     batch_bad = train_data.get_bad_batch_cnt(params.batch_size - params.batch_size*4//5, self.words.vocab_size)
                     x = np.concatenate((batch_good[0], batch_bad[0]))
@@ -119,8 +119,8 @@ class BaseModel(object):
                     y = np.concatenate((batch_good[2], batch_bad[2]))
                     feed_dict = self.get_feed_dict((x, q, y), is_train=True)
                     summary, _, global_step = self.train_batch(feed_dict)
+                    self.summary_writer.add_summary(summary, global_step)
 
-                self.summary_writer.add_summary(summary, global_step)
                 train_data.reset()
 
                 if (epoch_no + 1) % params.acc_period == 0:
@@ -148,11 +148,11 @@ class BaseModel(object):
 
 
     def eval(self, data, name):
-        num_batches = data.get_batch_num(full_batch = False)
+        num_batches = data.get_batch_num()
         losses = []
         accs = []
         for _ in range(num_batches):
-            batch = data.next_batch(full_batch = False)
+            batch = data.next_batch()
             feed_dict = self.get_feed_dict(batch, is_train=False)
             batch_loss, global_step, batch_acc = self.test_batch(feed_dict)
             losses.append(batch_loss)

@@ -72,11 +72,11 @@ parser.add_argument('--lm_dir', default='')
 parser.add_argument('--task', nargs='+', default=['1'], type=str, choices=[str(i) for i in range(1, 21)]+['all'])
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--num_epochs', default=256, type=int)
-parser.add_argument('--learning_rate', default=0.002, type=float)
+parser.add_argument('--learning_rate', default=0.01, type=float)
 parser.add_argument('--rl_learning_rate', default=0.001, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
-parser.add_argument('--acc_period', default=10, type=int)
-parser.add_argument('--val_period', default=40, type=int)
+parser.add_argument('--acc_period', default=1, type=int)
+parser.add_argument('--val_period', default=1, type=int)
 parser.add_argument('--gpu_fraction', default=0.8, type=float)
 
 # dmn params
@@ -95,7 +95,7 @@ parser.add_argument('--seq2seq_hidden_size', default=50, type=int)
 parser.add_argument('--seq2seq_weight_decay', default=0.001, type=float)
 
 # ren params
-parser.add_argument('--ren_embedding_size', default=20, type=int)
+parser.add_argument('--ren_embedding_size', default=50, type=int)
 parser.add_argument('--ren_num_blocks', default=10, type=int)
 
 # RNNLM params

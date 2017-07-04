@@ -23,7 +23,7 @@ class REN(BaseModel):
         question = tf.placeholder('int32', shape=[None, question_size], name='q')  # [num_batch, question_len]
         answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
         is_training = tf.placeholder(tf.bool)
-        batch_size = tf.shape(story)[0]
+        # batch_size = tf.shape(story)[0]
 
         normal_initializer = tf.random_normal_initializer(stddev=0.1)
         ones_initializer = tf.constant_initializer(1.0)
@@ -75,6 +75,12 @@ class REN(BaseModel):
             predicts = tf.argmax(logits, 1)
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=answer)
             self.total_loss = tf.reduce_mean(cross_entropy)
+            corrects = tf.equal(tf.cast(predicts, 'int32'), answer)
+            num_corrects = tf.reduce_sum(tf.cast(corrects, tf.float32))
+            self.accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
+            tf.summary.scalar('loss', self.total_loss, collections=['TRAIN_SUMM'])
+            tf.summary.scalar('accuracy', self.accuracy, collections=['TRAIN_SUMM'])
+            self.merged_TRAIN = tf.summary.merge_all(key='TRAIN_SUMM')
 
             if not forward_only:
                 def learning_rate_decay_fn(lr, global_step):
@@ -98,9 +104,6 @@ class REN(BaseModel):
             self.q = question
             self.y = answer
             self.is_training = is_training
-            corrects = tf.equal(tf.cast(predicts, 'int32'), answer)
-            num_corrects = tf.reduce_sum(tf.cast(corrects, tf.float32))
-            self.accuracy = tf.reduce_mean(tf.cast(corrects, tf.float32))
 
             # Output Module
             if not forward_only:

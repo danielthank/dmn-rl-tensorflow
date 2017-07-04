@@ -239,11 +239,17 @@ class Seq2Seq(BaseModel):
         )
         basic_cell = GRUCell(params.seq2seq_hidden_size)
         multi_cell = MultiRNNCell([attn_cell, basic_cell])
-        decoder_helper = tf.contrib.seq2seq.ScheduledEmbeddingTrainingHelper(
-            inputs=decoder_inputs,
-            sequence_length=tf.constant([params.question_size] * params.batch_size),
+        # decoder_helper = tf.contrib.seq2seq.ScheduledEmbeddingTrainingHelper(
+            # inputs=decoder_inputs,
+            # sequence_length=tf.constant([params.question_size] * params.batch_size),
+            # embedding=embedding,
+            # sampling_probability=tf.constant(0.0)
+        # )
+
+        decoder_helper = tf.contrib.seq2seq.SampleEmbeddingHelper(
             embedding=embedding,
-            sampling_probability=tf.constant(0.0)
+            start_tokens=[1] * params.batch_size,
+            end_token=0
         )
 
         initial_state = (attn_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size).clone(cell_state=qg_story[:, -1]),
@@ -256,7 +262,8 @@ class Seq2Seq(BaseModel):
             output_layer=Dense(self.words.vocab_size)
         )
         final_outputs, final_state, final_length = tf.contrib.seq2seq.dynamic_decode(
-            decoder=decoder
+            decoder=decoder,
+            maximum_iterations=Q
         )
         q_logprobs = final_outputs.rnn_output
         chosen_idxs = final_outputs.sample_id
