@@ -79,7 +79,7 @@ class TypeSelect(BaseModel):
         ## summary writer##
         #if not self.action == 'test':
         self.task_summary_writers = {'train':[],'test':[]}
-        for i in range(params.action_num+1):
+        for i in range(params.action_num):
             if i != params.action_num :
                 task_summary_dir = os.path.join(self.save_dir,'task_%d'%(i+1))
                 test_task_summary_dir = os.path.join(self.save_dir,'test_task_%d'%(i+1))
@@ -169,7 +169,7 @@ class TypeSelect(BaseModel):
 
         with tf.variable_scope('type_selector', initializer=tf.contrib.layers.xavier_initializer()) :
             all_QA_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA')]
-            QA_state_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA')]
+            QA_state_vars = [x for x in tf.trainable_variables() if x.name.startswith('QA/qa_embedding')]
             for var in all_QA_vars:
                 print ('name: ',var.name)
                 print ('shape: ',var.shape)
@@ -180,20 +180,25 @@ class TypeSelect(BaseModel):
 
             with tf.name_scope('DQN') as scope :
                 ## DQN setting 
-                self.state_mode = 'QA_var action'
+                self.state_mode = 'QA_var not_improve'
                 self.other_state_size = 0
                 self.var_state_size = 0
                 if 'QA_var' in self.state_mode:
                     self.var_state_size += QA_state_var_num
                 
                 if 'action_record' in self.state_mode:
-                    self.other_state_size += params.action_num + 1
+                    #self.other_state_size += params.action_num + 1
+                    self.other_state_size += params.action_num
 
                 if 'last_action' in self.state_mode:
-                    self.other_state_size += params.action_num + 1
+                    #self.other_state_size += params.action_num + 1
+                    self.other_state_size += params.action_num
 
                 if 'last_reward' in self.state_mode:
                     self.other_state_size += 1
+
+                if 'not_improve' in self.state_mode:
+                    self.other_state_size += params.action_num
                 
                 if 'acc' in self.state_mode:
                     self.other_state_size += 1
@@ -206,7 +211,7 @@ class TypeSelect(BaseModel):
                 self.var_state_summary = tf.summary.histogram('var_state',var_state)
                 
                 other_state = tf.placeholder(tf.float32,shape=[None,self.other_state_size],name='other_state')
-                actions = tf.placeholder(tf.float32,shape=[None,params.action_num+1],name='learner_actions')
+                actions = tf.placeholder(tf.float32,shape=[None,params.action_num],name='learner_actions')
                 target_Q_value = tf.placeholder(tf.float32,shape=[None],name='target_Q_values')
                
                 with tf.name_scope('var_state_function'):
@@ -228,7 +233,7 @@ class TypeSelect(BaseModel):
                     merge = other_state
                 
                 fc = tf.layers.dense(merge,128,activation=tf.nn.relu)
-                Q_values = tf.layers.dense(fc,params.action_num+1,name='Q_value_output') 
+                Q_values = tf.layers.dense(fc,params.action_num,name='Q_value_output') 
 
                 action_Q_value = tf.reduce_sum(tf.multiply(Q_values,actions),reduction_indices=1)
                 max_Q_value = tf.reduce_max(Q_values,axis=-1)
@@ -237,8 +242,8 @@ class TypeSelect(BaseModel):
            
             with tf.name_scope('Loss'):
                 Q_value_loss = tf.reduce_mean(tf.square(action_Q_value-target_Q_value))
-               '''
-               #reconstruct_loss = tf.reduce_mean(tf.reduce_sum(tf.square(reconstruct-var_state),1))
+                '''
+                #reconstruct_loss = tf.reduce_mean(tf.reduce_sum(tf.square(reconstruct-var_state),1))
                 #reconstruct_loss = tf.reduce_mean(tf.reduce_sum(tf.abs(reconstruct-var_state),1))
                 if self.var_state_size != 0:
                     DQN_loss = Q_value_loss + 0.1*reconstruct_loss
@@ -247,7 +252,7 @@ class TypeSelect(BaseModel):
                 '''
                 DQN_loss = Q_value_loss
                 tf.summary.scalar('Q_value_loss',Q_value_loss,collections=['DQN_SUMM']) 
-                tf.summary.scalar('reconstruct_loss',reconstruct_loss,collections=['DQN_SUMM']) 
+                #tf.summary.scalar('reconstruct_loss',reconstruct_loss,collections=['DQN_SUMM']) 
                 tf.summary.scalar('DQN_loss',DQN_loss,collections=['DQN_SUMM']) 
         
         with tf.variable_scope('Episode', initializer=tf.contrib.layers.xavier_initializer()):
@@ -347,7 +352,7 @@ class TypeSelect(BaseModel):
             QA_q_mem.reset()
             QA_y_mem.reset()
             
-            action_record = np.zeros((params.action_num+1))
+            action_record = np.zeros((params.action_num))
             self.acc = 0
             for it in range(max_action+1):
                 print ('epsiode %d: action %d'%(episo,it),end='\r')
@@ -399,7 +404,7 @@ class TypeSelect(BaseModel):
             self.tmp_QA_q_mem = QuestionMemory((params.question_size,), sample_num, dtype='int32')
             self.tmp_QA_y_mem = QuestionMemory((), sample_num, dtype='int32')
             ## DQN memory pool
-            self.dqn_memory_pool = DQNMemory([(self.var_state_size,),(self.other_state_size,)],params.action_num+1,memory_size)
+            self.dqn_memory_pool = DQNMemory([(self.var_state_size,),(self.other_state_size,)],params.action_num,memory_size)
 
             self.initial = True
     
@@ -421,47 +426,48 @@ class TypeSelect(BaseModel):
         self.last_state = None
         self.last_action = None
         self.last_reward = None
-        self.action_record = np.zeros((params.action_num+1))
-        self.reward_record = np.zeros((params.action_num+1))
+        self.action_record = np.zeros((params.action_num))
+        self.reward_record = np.zeros((params.action_num))
+        self.not_improve = np.zeros((params.action_num))
 
     def train(self, train_data,val_data,learning_mode):    
         params = self.params 
         assert self.action is not 'test'
-        max_action = 15
-        episode = 300
-        memory_size = 10000 
+        max_action = 5
+        episode = 1000
+        memory_size = 100000 
         #sample_num = params.batch_size
         sample_num = 50
 
         ## initial all memory
         self.initial_environment(max_action,sample_num,memory_size) 
-        
+        epsilon=0
+        T=0
         try:
             for episo in range(episode):
                 ## reset environment
-                self.environment_reset()
                 
                 if learning_mode == 'epsilon_greedy':
                     ## epsilon greedy
                     epsilon = 1/(1+episo/200)
                 elif learning_mode == 'soft_q':
                     ## temperature
-                    T = max(100*0.4**(episo//50),0.1)
+                    T = max(100*0.99**(episo//50),0.1)
                 
                 if (episo+1)%10 == 0:
                     print ('Train DQN on all memory')
-                    for _ in range(10):
-                        self.DQN_train(num_batch = 'all')
+                    for _ in range(5):
+                        self.DQN_train(num_batch = 10)
                     self.test(train_data,val_data,max_action,sample_num,episo,learning_mode)
                 
-                                
+                self.environment_reset()
                 _,self.acc = self.eval(val_data,name='QA')
                 print ('episode %d========================'%episo)
                 print ('initial acc : %f'%self.acc)
                 for it in range(max_action):
                     print ('    action %d'%(it),end='')
                     ## get learner QA variables value(learner state)
-                    learner_state = self.get_learner_state(self.last_action,self.last_reward,self.state_mode)
+                    learner_state = self.get_learner_state(self.state_mode)
                     
                     ## push observation into DQN memory pool
                     self.dqn_pool_add(learner_state)
@@ -473,7 +479,7 @@ class TypeSelect(BaseModel):
                     
                     ## sample questions from data set
                     if action != params.action_num:
-                        contexts,questions,ans = train_data[action].get_random_cnt(sample_num)
+                        contexts,questions,ans = train_data[action].get_batch_cnt(sample_num)
                         self.QA_x_mem.append(contexts)
                         self.QA_q_mem.append(questions)
                         self.QA_y_mem.append(ans)
@@ -487,7 +493,7 @@ class TypeSelect(BaseModel):
                     else:
                         terminate = 1
                     reward,converge_time = self.get_DQN_reward(action,val_data,terminate)
-
+                    
                     self.reward_record[action] += reward               
                     print (', reward %f'%(reward),end='')
                     print (', acc %f'%(self.acc))
@@ -496,7 +502,7 @@ class TypeSelect(BaseModel):
                     
                     ## memory replay
                     if (self.dqn_memory_pool.size > 5*max_action or episo > 20) and self.dqn_memory_pool.size%10 == 0:
-                        self.DQN_train(dqn_memory_pool,num_batch = 1)
+                        self.DQN_train(num_batch = 1)
 
                     if terminate == 0:
                         break
@@ -507,7 +513,7 @@ class TypeSelect(BaseModel):
                     self.last_terminate = terminate
                 
                 assert terminate == 0    
-                dqn_memory_pool.append(learner_state,action,reward,learner_state,terminate)
+                self.dqn_memory_pool.append(learner_state,action,reward,learner_state,terminate)
                 print ('episode %d terminate, acc=%f'%(episo,self.acc))
                 print (self.action_record)
                 
@@ -521,6 +527,8 @@ class TypeSelect(BaseModel):
                 self.sess.run([self.QA_local_step_reset])
                 tf.reset_default_graph() 
                 gc.collect()
+                for data_set in train_data:
+                    data_set.reset()
         
         except KeyboardInterrupt:
             print ('KeyboardInterrupt')
@@ -541,7 +549,7 @@ class TypeSelect(BaseModel):
         for it in range(max_action):
             print ('=== [ action %i ] ==='%it)
             ## get learner QA variables value(learner state)
-            learner_state = self.get_learner_state(self.last_action,self.last_reward,self.state_mode)
+            learner_state = self.get_learner_state(self.state_mode)
 
             feed_list  = [self.var_state_summary,self.action_global_step]
             feed_dict = {self.var_state:np.expand_dims(learner_state[0],axis=0)}
@@ -555,7 +563,7 @@ class TypeSelect(BaseModel):
            
             ## sample questions from data set
             if action != params.action_num:
-                contexts,questions,ans = train_data[action].get_random_cnt(sample_num)
+                contexts,questions,ans = train_data[action].get_batch_cnt(sample_num)
                 self.QA_x_mem.append(contexts)
                 self.QA_q_mem.append(questions)
                 self.QA_y_mem.append(ans)
@@ -601,7 +609,9 @@ class TypeSelect(BaseModel):
         self.sess.run([self.QA_var_reset,self.QA_global_step_update])
         self.sess.run([self.QA_local_step_reset])
         tf.reset_default_graph() 
-        #gc.collect()
+        gc.collect()
+        for data_set in train_data:
+            data_set.reset()
 
     def dqn_pool_add(self,new_state):    
         if self.last_state is not None and self.last_action is not None:
@@ -642,7 +652,7 @@ class TypeSelect(BaseModel):
             self.summary_writer.add_summary(DQN_summ, DQN_global_step)
             self.var_summary_writer.add_summary(DQN_VAR_summ, DQN_global_step)
     
-    def get_learner_state(self,last_action,last_reward,state_mode): 
+    def get_learner_state(self,state_mode): 
         params = self.params 
         
         var_state = np.zeros(0,'float32')
@@ -657,18 +667,27 @@ class TypeSelect(BaseModel):
             other_state = np.append(other_state,self.action_record)             
 
         if 'last_action' in state_mode:
-            one_hot_last_action = np.zeros(params.action_num+1)
+            one_hot_last_action = np.zeros(params.action_num)
             if last_action is not None:
-                one_hot_last_action[last_action]=1
+                one_hot_last_action[self.last_action]=1
             other_state = np.append(other_state,one_hot_last_action)
 
         if 'last_reward' in state_mode:
-            if last_reward is not None:
-                other_state = np.append(other_state,last_reward)
+            if self.last_reward is not None:
+                other_state = np.append(other_state,self.last_reward)
             else:
                 other_state = np.append(other_state,0)
+        if 'not_improve' in state_mode :
+            if self.last_reward == 0:
+                self.not_improve[self.last_action] += 1
+            else :
+                self.not_improve = np.zeros((params.action_num))
+            other_state = np.append(other_state,self.not_improve)
+            #print (self.not_improve)
+
         if 'acc' in state_mode :
             other_state = np.append(other_state,self.acc)
+        
         return [var_state,other_state]
 
     def decide_action(self,state,learning_mode,epsilon,T,verbose=False):
@@ -691,7 +710,7 @@ class TypeSelect(BaseModel):
             q -= np.max(q)
             p = np.exp(q)
             p /= np.sum(p)
-            action = np.random.choice(params.action_num+1,1,p=p)[0]
+            action = np.random.choice(params.action_num,1,p=p)[0]
             if verbose:
                 print ('probability : ',p)
         elif learning_mode == 'random':
@@ -789,7 +808,7 @@ class TypeSelect(BaseModel):
             self.test_summary_writer.add_summary(action_summ,action_global_step) 
         
         ## write Q value of each action(including terminate action)
-        for i in range(params.action_num+1):
+        for i in range(params.action_num):
             task_action_summ = self.sess.run(self.task_action_summ_list,feed_dict={self.action_q:Q_values[i]})
             self.task_summary_writers[name][i].add_summary(task_action_summ,action_global_step)
     
@@ -809,7 +828,7 @@ class TypeSelect(BaseModel):
         elif name == 'test':
             self.test_summary_writer.add_summary(episode_summ,episode_step) 
         ## write number of each action and average reward of each action
-        for i in range(params.action_num+1):
+        for i in range(params.action_num):
             num_action = self.action_record[i]
             ave_reward = self.reward_record[i]/(self.action_record[i]+1e-9)
             task_episode_summ = self.sess.run(self.task_episode_summ_list,feed_dict={self.num_action:num_action,
