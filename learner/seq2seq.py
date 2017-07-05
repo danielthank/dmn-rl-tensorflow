@@ -48,9 +48,11 @@ class Seq2Seq(BaseModel):
                 qa_story = story_positional_encoding * qa_story
                 qa_story = tf.reduce_sum(qa_story, 2)  # [batch, story, embedding_size]
                 qa_story = dropout(qa_story, 0.5, self.is_training)
-                num_layers = 3
-                q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
-                q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                num_layers = 1
+                #q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                #q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                q_cell_fw = rnn.LSTMCell(V)
+                q_cell_bw = rnn.LSTMCell(V)
                 (qa_states_fw, qa_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
                                                                                        q_cell_bw,
                                                                                        qa_story,
@@ -94,9 +96,11 @@ class Seq2Seq(BaseModel):
                 qg_story = story_positional_encoding * qg_story
                 qg_story = tf.reduce_sum(qg_story, 2)  # [batch, story, embedding_size]
                 qg_story = dropout(qg_story, 0.5, self.is_training)
-                num_layers = 3
-                q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
-                q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                num_layers = 1
+                #q_cell_fw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                #q_cell_bw = tf.contrib.rnn.MultiRNNCell([rnn.LSTMCell(V) for l in range(num_layers)])
+                q_cell_fw = rnn.LSTMCell(V)
+                q_cell_bw = rnn.LSTMCell(V)
                 (qg_states_fw, qg_states_bw), (_, _) = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
                                                                                        q_cell_bw,
                                                                                        qg_story,
@@ -147,8 +151,9 @@ class Seq2Seq(BaseModel):
         with tf.name_scope("PolicyGradient"):
             chosen_one_hot = tf.placeholder(tf.float32, shape=[N, Q, A], name='act')
             rewards = tf.placeholder(tf.float32, shape=[N], name='rewards')
-            baseline_t = tf.placeholder(tf.float32, shape=[], name='baseline')
-            advantages = rewards - baseline_t
+            #baseline_t = tf.placeholder(tf.float32, shape=[], name='baseline')
+            #advantages = rewards - baseline_t
+            advantages = tf.placeholder(tf.float32, shape=[N], name='advantages')
             tf.summary.scalar('rewards', tf.reduce_mean(rewards), collections=["RL_SUMM"])
             tf.summary.scalar('advantages', tf.reduce_mean(advantages), collections=["RL_SUMM"])
             stack_q_probs = tf.transpose(q_probs, perm=[1, 0, 2]) # [Q , N, A] -> [N, Q, A]
@@ -170,7 +175,8 @@ class Seq2Seq(BaseModel):
         # policy gradient placeholders
         self.chosen_one_hot = chosen_one_hot
         self.rewards = rewards
-        self.baseline_t = baseline_t
+        self.advs = advantages
+        #self.baseline_t = baseline_t
 
         # QA output tensors
         self.QA_ans_logits = QA_ans_logits
@@ -197,7 +203,7 @@ class Seq2Seq(BaseModel):
         if not forward_only:
             rl_l_rate = self.params.rl_learning_rate
             l_rate = self.params.learning_rate
-            self.RL_opt_op = create_opt('RL_opt', self.J, rl_l_rate, self.RL_global_step, decay_steps=5000, clip=0.2)
+            self.RL_opt_op = create_opt('RL_opt', self.J, rl_l_rate, self.RL_global_step, decay_steps=5000, clip=0.5)
             self.Pre_opt_op = create_opt('Pre_opt',
                                          0.5*self.QA_total_loss + 0.5*self.QG_total_loss,
                                          l_rate,

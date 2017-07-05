@@ -12,7 +12,7 @@ from data_helper.question_memory import QuestionMemory
 
 
 def sigmoid(x):
-    return 1 / (1 + np.exp(-0.3*x))
+    return 1 / (1 + np.exp(-1.*x))
 
 def get_rep_rewards(qs, V):
     batch_size  = qs.shape[0]
@@ -157,6 +157,9 @@ class BaseModel(object):
         self.validation_summary_writer = self.summary_writers[action][1]
         self.var_summary_writer = self.summary_writers[action][2]
 
+    def set_params(self, **kargs):
+        self.params = self.params._replace(**kargs)
+
     def build(self):
         raise NotImplementedError()
 
@@ -178,7 +181,7 @@ class BaseModel(object):
 
     def get_rewards(self, batch, pred_qs, is_discriminator=False):
         expert_entropys, expert_anses = self.ask_expert(batch, pred_qs)
-        discriminator_probs = self.ask_discriminator(batch, pred_qs)
+        #discriminator_probs = self.ask_discriminator(batch, pred_qs)
         if not is_discriminator:
             learner_entropys, learner_anses = self.ask_learner(batch, pred_qs)
         rep_rewards = get_rep_rewards(pred_qs, self.words.vocab_size).astype('float32')
@@ -193,8 +196,9 @@ class BaseModel(object):
             tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp*0.1
         else:
             tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
-
-        return tot_rewards, expert_anses, discriminator_probs, perp
+            #tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 0.*discriminator_probs
+        advs = np.clip(tot_rewards - self.baseline, -0.5, 0.5)*2
+        return tot_rewards, advs, expert_anses, perp
 
     def D_train_batch(self, q_batch, label_batch):
         feed_dict = {self.q: q_batch, self.D_labels: label_batch}
@@ -218,11 +222,11 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True, is_sample=True)
         pred_qs = self.get_question(feed_dict)
 
-        rewards, expert_anses, d, perp = self.get_rewards(batch, pred_qs)
+        rewards, advs, expert_anses, perp = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
-        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards, self.baseline_t: self.baseline})
-        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, pred_qs, expert_anses, d, perp
+        feed_dict.update({self.chosen_one_hot: chosen_one_hot, self.rewards: rewards, self.advs: advs})
+        return self.sess.run(self.rl_train_list, feed_dict=feed_dict), rewards, advs, pred_qs, expert_anses, perp
 
     def q2string(self, q):
         for i in range(0, len(q)):
@@ -252,7 +256,7 @@ class BaseModel(object):
         feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=False)
         pred_qs = self.get_question(feed_dict)
 
-        rewards, expert_anses, _ = self.get_rewards(batch, pred_qs)
+        rewards, advs, expert_anses, _ = self.get_rewards(batch, pred_qs)
         chosen_one_hot = (np.arange(A) == pred_qs[:, :, None]).astype('float32')
 
         #rl_test_list = [self.J, self.QA_total_loss, self.accuracy]
@@ -308,7 +312,7 @@ class BaseModel(object):
             #batch = train_data.get_batch_cnt(512)
             train_data = train_data[:512]
         num_batches = train_data.num_batches
-        print("Pre-Training on %d samples" % train_data.count)
+        print("Pre-Training %d epochs on %d samples" % (num_epochs, train_data.count))
         #t_q_mem.append(np.array(batch[1]))
         t_q_mem.append(train_data.get_all()[1])
         try:
@@ -318,9 +322,9 @@ class BaseModel(object):
                     QA_summ, QG_summ, Pre_global_step, _ = self.pre_train_batch(batch)
                     feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=True)
                     pred_qs = self.get_question(feed_dict)
-                    rewards, expert_anses, d, perp = self.get_rewards(batch, pred_qs, is_discriminator=True)
+                    rewards, advs, expert_anses, perp = self.get_rewards(batch, pred_qs, is_discriminator=True)
                     if i == 0:
-                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'D:', d[0], 'perp:', perp[0] if perp is not None else 'None', 'Task:', batch[3][0])
+                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'perp:', perp[0] if perp is not None else 'None', 'Task:', batch[3][0])
                         #print("bad Predict_Q: ", self.q2string(pred_qs[rewards < 1.5][0]), 'Rewards:', rewards[rewards < 1.5][0], 'D:', d[rewards < 1.5][0])
                         #print("push %d bad  questions to mem of size %d" % (len(pred_qs[rewards < 1.5]), len(f_q_mem)))
                         #print("push %d good questions to mem of size %d" % (len(pred_qs[rewards > 4.5]), len(t_q_mem)))
@@ -400,12 +404,17 @@ class BaseModel(object):
                 # tot_QA_acc = [0.]
                 for i in range(num_batches):
                     batch = train_data.next_batch()
-                    (rl_summ, RL_global_step, _), r_all, pred_qs, expert_anses, d, perp = self.rl_train_batch(batch)
+                    (rl_summ, RL_global_step, _), r_all, advs, pred_qs, expert_anses, perp = self.rl_train_batch(batch)
                     self.summary_writer.add_summary(rl_summ, RL_global_step)
                     mean_r = np.mean(r_all)
                     if i == 0:
-                        text = "Content:\n" + self.content2string(batch[0][0])
-                        text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' Adv: ' + str(r_all[0] - self.baseline) + ' D: ' + str(d[0]) + ' perp:' + (str(perp[0]) if perp is not None else 'None') + ' Task: ' + str(batch[3][0])
+                        s_ = np.random.randint(r_all.shape[0])
+                        b_ = np.random.randint(r_all.shape[0])
+                        text = "Content:\n" + self.content2string(batch[0][s_])
+                        text += "Predict_Q: " + self.q2string(pred_qs[s_]) + ' Reward: ' + str(r_all[s_]) + ' Adv: ' + str(advs[s_]) + ' perp:' + (str(perp[s_]) if perp is not None else 'None') + ' Task: ' + str(batch[3][s_])
+                        print(text)
+                        text = "Content:\n" + self.content2string(batch[0][b_])
+                        text += "Predict_Q: " + self.q2string(pred_qs[b_]) + ' Reward: ' + str(r_all[b_]) + ' Adv: ' + str(advs[b_]) + ' perp:' + (str(perp[b_]) if perp is not None else 'None') + ' Task: ' + str(batch[3][b_])
                         print(text)
                         print()
                     r.append(mean_r)
@@ -482,10 +491,10 @@ class BaseModel(object):
             batch = train_data.next_batch()
             feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=True, is_sample=True)
             pred_qs = self.get_question(feed_dict)
-            r_all, expert_anses, d, perp = self.get_rewards(batch, pred_qs)
+            r_all, advs, expert_anses, perp = self.get_rewards(batch, pred_qs)
             if i % 1 == 0:
                 text = "Content:\n" + self.content2string(batch[0][0])
-                text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' D: '+ str(d[0]) + ' perp:' + (str(perp[0]) if perp is not None else 'None') + ' Task: ' + str(batch[3][0])
+                text += "Predict_Q: " + self.q2string(pred_qs[0]) + ' Reward: ' + str(r_all[0]) + ' perp:' + (str(perp[0]) if perp is not None else 'None') + ' Task: ' + str(batch[3][0])
                 print(text)
                 print()
             QA_x_mem.append(batch[0])
@@ -496,7 +505,7 @@ class BaseModel(object):
         assert len(QA_q_mem) <= Q_limit
         print("QA Re-Training %d epochs ..." % num_epochs)
         try:
-            MA_ratio = 0.6
+            MA_ratio = 0.9
             MA_val_loss = 0.
             MA_val_acc = 0.
             for epoch_no in range(num_epochs):
@@ -521,7 +530,7 @@ class BaseModel(object):
             MA_val_loss = MA_ratio*MA_val_loss + (1-MA_ratio)*val_loss if not MA_val_loss == 0. else val_loss
             MA_val_acc = MA_ratio*MA_val_acc + (1-MA_ratio)*val_acc if not MA_val_acc == 0. else val_acc
             print("[Training {}/{} step {}] QA_Loss = {:.4f} QA_ACC = {:.4f}".format(epoch_no, num_epochs, QA_global_step, MA_val_loss, MA_val_acc))
-            return val_loss, val_acc
+            return MA_val_loss, MA_val_acc, val_loss, val_acc
         return
 
     def eval(self, data, name):
@@ -635,8 +644,9 @@ class BaseModel(object):
         qs = LMDataSet(batch_size, self.lm.params.lm_num_steps, qs.ravel())
         _, log_perps, iters = self.lm.eval(qs, self.lm.params.action)
         log_perps *= seq_mask[:, :-1]
-        perp = np.exp(np.sum(log_perps, axis=1) / length)
-        return perp
+        null_q = length < 1
+        perp = np.exp(np.sum(log_perps, axis=1) / (length + null_q)) + null_q*75.
+        return (sigmoid(np.clip(perp, 15, 75.) - 15.) - 0.5)*2
 
 
     def CQ_similarity(self, content, keyterm):
