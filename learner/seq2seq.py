@@ -109,14 +109,13 @@ class Seq2Seq(BaseModel):
                 with tf.device("/cpu:0"):
                     qg_q = tf.nn.embedding_lookup(qg_embedding, question) # [N, Q, V]
                 qg_q = dropout(qg_q, 0.5, self.is_training)
-            q_logprobs, q_length, chosen_idxs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous, self.is_training)
+            q_logprobs, chosen_idxs = self.QG_branch(qg_embedding, qg_q, qg_story, feed_previous, self.is_training)
             q_probs = tf.nn.softmax(q_logprobs, dim=-1)
             with tf.name_scope('Loss'):
                 target_list = tf.unstack(tf.transpose(question)) # Q * [N]
                 # Cross-Entropy loss
-                QG_loss = tf.contrib.seq2seq.sequence_loss(q_logprobs, question, tf.cast(tf.sequence_mask(q_length, Q),
-                                                                                         tf.float32))
-                                                   # [tf.ones(shape=tf.stack([tf.shape(answer)[0],]), dtype=tf.float32)] * Q )
+                QG_loss = tf.contrib.seq2seq.sequence_loss(q_logprobs, question, tf.ones([params.batch_size,
+                                                                                          params.question_size]))
                 #QG_total_loss = QG_loss + params.seq2seq_weight_decay * tf.add_n(tf.get_collection('l2'))
                 QG_total_loss = QG_loss
             tf.summary.scalar('loss', QG_total_loss, collections=["QG_SUMM"])
@@ -189,20 +188,21 @@ class Seq2Seq(BaseModel):
         with tf.device("/cpu:0"):
             go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
         num_layers = 2
+        basic_cell = GRUCell(params.seq2seq_hidden_size)
         attn_cell = tf.contrib.seq2seq.AttentionWrapper(
             GRUCell(params.seq2seq_hidden_size),
-            tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qa_story)
+            tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qa_story),
+            attention_layer_size=params.seq2seq_hidden_size
         )
-        basic_cell = GRUCell(params.seq2seq_hidden_size)
-        multi_cell = MultiRNNCell([attn_cell, basic_cell])
+        multi_cell = MultiRNNCell([basic_cell, attn_cell])
 
-        initial_state = (attn_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size).clone(cell_state=qa_q),
-                         basic_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size))
+        initial_state = (basic_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size),
+                         attn_cell.zero_state(dtype=tf.float32, batch_size=self.batch_size).clone(cell_state=qa_q))
 
         output, _ = multi_cell(go_pad, initial_state)
         q_logprobs = tf.layers.dense(output, self.words.vocab_size)
-        q_logprobs = tf.contrib.layers.batch_norm(q_logprobs, decay=0.9, is_training=self.is_training, center=True, scale=True,
-                                                     updates_collections=None, scope='BatchNorm')
+        # q_logprobs = tf.contrib.layers.batch_norm(q_logprobs, decay=0.9, is_training=self.is_training, center=True, scale=True,
+                                                     # updates_collections=None, scope='BatchNorm')
 
         return q_logprobs
 
@@ -211,10 +211,10 @@ class Seq2Seq(BaseModel):
         L, Q, F = params.sentence_size, params.question_size, params.story_size
         V, A = params.seq2seq_hidden_size, self.words.vocab_size
         ## build decoder inputs ##
-        go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
-        with tf.device("/cpu:0"):
-            go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
-        decoder_inputs = tf.concat(axis=1, values=[go_pad, qg_q])[:,:-1] # [N, Q, V]
+        # go_pad = tf.ones(tf.stack([self.batch_size, 1]), dtype=tf.int32)
+        # with tf.device("/cpu:0"):
+            # go_pad = tf.nn.embedding_lookup(embedding, go_pad) # [N, 1, V]
+        # decoder_inputs = tf.concat(axis=1, values=[go_pad, qg_q])[:,:-1] # [N, Q, V]
         # decoder_inputs = tf.unstack(decoder_inputs, axis=1)[:-1] # Q * [N, V]
 
         ## output idxs ##
@@ -233,18 +233,13 @@ class Seq2Seq(BaseModel):
         # explore_eps = tf.cond(self.is_sample, explore_eps, tf.constant(0))
         tf.summary.scalar("explore_eps", explore_eps, collections=["VAR_SUMM"])
         ## question module rnn cell ##
+        basic_cell = GRUCell(params.seq2seq_hidden_size)
         attn_cell = tf.contrib.seq2seq.AttentionWrapper(
             GRUCell(params.seq2seq_hidden_size),
-            tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qg_story)
+            tf.contrib.seq2seq.LuongAttention(params.seq2seq_hidden_size, qg_story),
+            attention_layer_size=params.seq2seq_hidden_size
         )
-        basic_cell = GRUCell(params.seq2seq_hidden_size)
-        multi_cell = MultiRNNCell([attn_cell, basic_cell])
-        # decoder_helper = tf.contrib.seq2seq.ScheduledEmbeddingTrainingHelper(
-            # inputs=decoder_inputs,
-            # sequence_length=tf.constant([params.question_size] * params.batch_size),
-            # embedding=embedding,
-            # sampling_probability=tf.constant(0.0)
-        # )
+        multi_cell = MultiRNNCell([basic_cell, attn_cell])
 
         decoder_helper = tf.contrib.seq2seq.SampleEmbeddingHelper(
             embedding=embedding,
@@ -252,26 +247,29 @@ class Seq2Seq(BaseModel):
             end_token=0
         )
 
-        initial_state = (attn_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size).clone(cell_state=qg_story[:, -1]),
-                         basic_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size))
+        cell_state = (basic_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size),
+                         attn_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size).clone(cell_state=qg_story[:, -1]))
+        # cell_state = attn_cell.zero_state(dtype=tf.float32, batch_size=params.batch_size).clone(cell_state=qg_story[:, -1])
 
-        decoder = tf.contrib.seq2seq.BasicDecoder(
-            cell=multi_cell,
-            helper=decoder_helper,
-            initial_state=initial_state,
-            output_layer=Dense(self.words.vocab_size)
-        )
-        final_outputs, final_state, final_length = tf.contrib.seq2seq.dynamic_decode(
-            decoder=decoder,
-            maximum_iterations=Q
-        )
-        q_logprobs = final_outputs.rnn_output
-        chosen_idxs = final_outputs.sample_id
-        # q_logprobs = tf.contrib.layers.batch_norm(final_state, decay=0.9, is_training=self.is_training, center=True, scale=True,
+        _, cell_input = decoder_helper.initialize()
+        q_logprobs = []
+        chosen_idxs = []
+        for z in range(Q):
+            cell_output, cell_state = multi_cell(cell_input, cell_state)
+            cell_output = tf.layers.dense(cell_output, self.words.vocab_size)
+            q_logprobs.append(cell_output)
+
+            sample_id = decoder_helper.sample(z, cell_output, cell_state)
+            chosen_idxs.append(sample_id)
+            _, cell_input, cell_state = decoder_helper.next_inputs(z, cell_output, cell_state, sample_id)
+
+        q_logprobs = tf.stack(q_logprobs, axis=1)
+        chosen_idxs = tf.stack(chosen_idxs, axis=1)
+
+        # q_logprobs = tf.contrib.layers.batch_norm(q_logprobs, decay=0.9, is_training=self.is_training, center=True, scale=True,
                                                   # updates_collections=None, scope='BatchNorm')
 
-        # assert len(chosen_idxs) == Q
-        return q_logprobs, final_length, chosen_idxs
+        return q_logprobs, chosen_idxs
 
     def def_run_list(self):
         self.pre_train_list = [self.merged_QA, self.merged_QG, self.Pre_global_step, self.Pre_opt_op]

@@ -53,16 +53,6 @@ class BaseModel(object):
         ## dirs ##
         self.save_dir = params.save_dir
         self.load_dir = params.load_dir
-        """
-        if params.action == 'train':
-            self.summary_dir = os.path.join(self.save_dir, 'pretrain_summary')
-            self.validation_summary_dir = os.path.join(self.save_dir, 'pretrain_validation_summary')
-            self.var_summary_dir = os.path.join(self.save_dir, 'pretrain_var_summary')
-        elif params.action == 'rl':
-            self.summary_dir = os.path.join(self.save_dir, 'RL_summary')
-            self.validation_summary_dir = os.path.join(self.save_dir, 'RL_validation_summary')
-            self.var_summary_dir = os.path.join(self.save_dir, 'RL_var_summary')
-        """
 
         ## set params ##
         self.action = params.action
@@ -103,13 +93,6 @@ class BaseModel(object):
             self.sess.run(self.init_op)
 
         ## summary writer##
-        """
-        if not self.action == 'test':
-            self.summary_writer = tf.summary.FileWriter(logdir=self.summary_dir, graph=self.sess.graph)
-            self.validation_summary_writer = tf.summary.FileWriter(logdir=self.validation_summary_dir,
-                                                                   graph=self.sess.graph)
-            self.var_summary_writer = tf.summary.FileWriter(logdir=self.var_summary_dir, graph=self.sess.graph)
-        """
         if not self.action == 'test':
             self.summary_writers = {"pretrain": [], "RL": []}
 
@@ -131,9 +114,11 @@ class BaseModel(object):
                                                                           graph=self.sess.graph))
 
         ## load expert ##
-        assert not expert_params == None
-        print("Loading Expert...")
-        self.expert = self.load_expert(expert_params)
+        if not expert_params == None:
+            print("Loading Expert...")
+            self.expert = self.load_expert(expert_params)
+        else:
+            self.expert = None
 
         ## load lm ##
         if not lm_params == None:
@@ -277,9 +262,9 @@ class BaseModel(object):
                     QA_summ, QG_summ, Pre_global_step, _ = self.pre_train_batch(batch)
                     feed_dict = self.get_feed_dict(batch, feed_previous=True, is_train=False, is_sample=True)
                     pred_qs = self.get_question(feed_dict)
-                    rewards, expert_anses, perp = self.get_rewards(batch, pred_qs)
+                    # rewards, expert_anses, perp = self.get_rewards(batch, pred_qs)
                     if i == 0:
-                        print("Predict_Q: ", self.q2string(pred_qs[0]), 'Rewards:', rewards[0], 'perp:', perp[0] if perp is not None else 'None', 'Task:', batch[3][0])
+                        print("Predict_Q: {} Task: {}".format(self.q2string(pred_qs[0]), batch[3][0]))
                     var_summ = self.sess.run(self.merged_VAR)
                     self.summary_writer.add_summary(QA_summ, Pre_global_step)
                     self.summary_writer.add_summary(QG_summ, Pre_global_step)
@@ -557,7 +542,7 @@ class BaseModel(object):
         ## translate tokens, pad q with <eos> ##
         qs = [self.lm_word_to_id[self.words.idx2word[token]] if self.words.idx2word[token] in self.lm_word_to_id else self.lm_word_to_id['<unk>'] for token in pred_qs.ravel()]
         qs = np.array(qs).reshape((batch_size, -1))
-        qs = np.insert(qs, qs.shape[1], self.lm_word_to_id['<eos>'], axis=1)
+        # qs = np.insert(qs, qs.shape[1], self.lm_word_to_id['<eos>'], axis=1)
 
         ## get sequence length , <eos> is 0##
         seq_mask = np.sign(np.abs(qs))

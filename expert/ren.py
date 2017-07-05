@@ -19,9 +19,9 @@ class REN(BaseModel):
 
         # initialize self
         # placeholders
-        story = tf.placeholder('int32', shape=[None, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
-        question = tf.placeholder('int32', shape=[None, question_size], name='q')  # [num_batch, question_len]
-        answer = tf.placeholder('int32', shape=[None], name='y')  # [num_batch] - one word answer
+        story = tf.placeholder('int32', shape=[batch_size, story_size, sentence_size], name='x')  # [num_batch, fact_count, sentence_len]
+        question = tf.placeholder('int32', shape=[batch_size, question_size], name='q')  # [num_batch, question_len]
+        answer = tf.placeholder('int32', shape=[batch_size], name='y')  # [num_batch] - one word answer
         is_training = tf.placeholder(tf.bool)
         # batch_size = tf.shape(story)[0]
 

@@ -18,6 +18,7 @@ def tokenize(sentence):
             token = token[:-1]
         if len(token):
             ret.append(token.lower())
+    ret.append('<eos>')
     return ret
 
 def parse_task(lines, task_id, only_supporting=False):

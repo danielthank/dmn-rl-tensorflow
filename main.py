@@ -72,7 +72,7 @@ parser.add_argument('--lm_dir', default='')
 parser.add_argument('--task', nargs='+', default=['1'], type=str, choices=[str(i) for i in range(1, 21)]+['all'])
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--num_epochs', default=256, type=int)
-parser.add_argument('--learning_rate', default=0.01, type=float)
+parser.add_argument('--learning_rate', default=0.001, type=float)
 parser.add_argument('--rl_learning_rate', default=0.001, type=float)
 parser.add_argument('--val_ratio', default=0.1, type=float)
 parser.add_argument('--acc_period', default=1, type=int)
@@ -188,8 +188,10 @@ def main(_):
         if params.action == 'train':
             if params.load_dir:
                 raise Exception("Learner in %s mode can only be trained from scratch!" % params.action)
+            """
             if (not params.expert_dir) or (not params.lm_dir):
                 raise Exception("Two auxiliary models are needed in learner %s mode! " % params.action)
+            """
             train_process = train_normal
         elif params.action == 'test':
             if (not params.load_dir) or (not params.expert_dir) or (not params.lm_dir):
