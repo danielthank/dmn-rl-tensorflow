@@ -214,9 +214,9 @@ def main(_):
             raise Exception("incompatible main model with load model!")
         params = params._replace(**load_params)
     else:
-        if tf.gfile.Exists(save_dir):
-            tf.gfile.DeleteRecursively(save_dir)
-        os.makedirs(save_dir, exist_ok=True)
+        if tf.gfile.Exists(params.save_dir):
+            tf.gfile.DeleteRecursively(params.save_dir)
+        os.makedirs(params.save_dir, exist_ok=True)
 
     ## load expert params from expert_dir ##
     if not params.expert_dir == '':

@@ -195,8 +195,8 @@ class BaseModel(object):
             #tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 1.*discriminator_probs
             tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp*0.1
         else:
-            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
             #tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 0.*discriminator_probs
+            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
         advs = np.clip(tot_rewards - self.baseline, -0.5, 0.5)*2
         return tot_rewards, advs, expert_anses, perp
 

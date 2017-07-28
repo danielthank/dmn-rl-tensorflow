@@ -6,7 +6,7 @@ import tensorflow as tf
 
 def run_experiments(MainModel, params, expert_params, lm_params, words, train, val, RL):
     assert (params.action == 'experiments_rl' and RL) or (params.action == 'experiments_nonrl' and not RL)
-    res_file = open(os.path.join(params.save_dir, 'result.txt'), 'w')
+    res_file = open(os.path.join(params.save_dir, 'result.csv'), 'w')
     res_writer = csv.writer(res_file)
     res_writer.writerow(['task_'+'_'.join([str(i) for i in params.task])])
     res_writer.writerow(['run', 'ratio', 'MA loss', 'MA acc', 'loss', 'acc'])
@@ -23,7 +23,8 @@ def run_experiments(MainModel, params, expert_params, lm_params, words, train, v
             if tf.gfile.Exists(learner_params.save_dir):
                 tf.gfile.DeleteRecursively(learner_params.save_dir)
             os.makedirs(learner_params.save_dir, exist_ok=True)
-            print('pre-train data ratio  : ', pre_ratio)
+            print('Run: ', run)
+            print('pre-train data ratio: ', pre_ratio)
             pretrain_data = train[:int(train.count*pre_ratio)]
             print("pre_train_num:", pretrain_data.count)
             rltrain_data = train[int(train.count*pre_ratio):]
