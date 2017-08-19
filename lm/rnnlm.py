@@ -13,7 +13,6 @@ class RNNLM(BaseModel):
     def build(self, eval_flag):
         params = self.params
         batch_size = params.batch_size
-        keep_prob = params.rnnlm_keep_prob
         vocab_size = self.vocab_size
         num_layers = params.rnnlm_layers
         hidden_size = params.rnnlm_hidden_size
@@ -24,6 +23,7 @@ class RNNLM(BaseModel):
         inputs = tf.placeholder('int32', shape=[None, num_steps], name='x')  # [num_batch, num_steps]
         ground_truth = tf.placeholder('int32', shape=[None, num_steps], name='y')  # [num_batch, num_steps] - right shift version of x
         is_training = tf.placeholder(tf.bool)
+        keep_prob = tf.placeholder(tf.float32)
         batch_size = tf.shape(inputs)[0]
 
         normal_initializer = tf.random_normal_initializer(stddev=0.1)
@@ -57,9 +57,10 @@ class RNNLM(BaseModel):
                 else:
                     return tf.contrib.rnn.BasicLSTMCell(
                         hidden_size, forget_bias=0.0, state_is_tuple=True)
-            
+            def attn_cell():
+                return tf.contrib.rnn.DropoutWrapper(lstm_cell(), output_keep_prob=keep_prob)
             cell = tf.contrib.rnn.MultiRNNCell(
-                [lstm_cell() for _ in range(num_layers)], state_is_tuple=True)
+                [attn_cell() for _ in range(num_layers)], state_is_tuple=True)
 
             self.initial_state = cell.zero_state(batch_size, 'float32')
             
@@ -70,9 +71,6 @@ class RNNLM(BaseModel):
                 for time_step in range(num_steps):
                     if time_step > 0:tf.get_variable_scope().reuse_variables()
                     (cell_output, state) = cell(inputs_embedding[:, time_step, :], state)
-                    cell_output = tf.cond(is_training, 
-                                      lambda: tf.nn.dropout(cell_output, keep_prob),
-                                      lambda: cell_output)
                     outputs.append(cell_output)
             
             output = tf.reshape(tf.stack(axis=1, values=outputs), [-1, hidden_size]) #[batch_size * num_steps, hidden_size]
@@ -108,6 +106,7 @@ class RNNLM(BaseModel):
             self.x = inputs
             self.y = ground_truth
             self.is_training = is_training
+            self.keep_prob = keep_prob
             self.log_perp = log_perp #[batch_size, 1]
             self.num_steps = num_steps
             # Output Module
@@ -122,6 +121,7 @@ class RNNLM(BaseModel):
             self.x: batches[0],
             self.y: batches[1],
             self.is_training: is_train,
+            self.keep_prob: self.params.rnnlm_keep_prob if is_train else 1.0
         }
         for i, (c, h) in enumerate(self.initial_state):
             feed_dict[c] = state[i].c
