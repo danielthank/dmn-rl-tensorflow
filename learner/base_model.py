@@ -20,16 +20,18 @@ def get_rep_rewards(qs, V):
     tot_reps    = np.zeros(batch_size)
     real_size   = np.zeros(batch_size, dtype='int32')
     for b in range(batch_size):
-        if_reps = [False]*V
+        #if_reps = [False]*V
         start = False
-        for i in range(q_size-1, -1, -1):
+        #for i in range(q_size-1, -1, -1):
+        for i in range(q_size-1, 0, -1):
             if not qs[b, i] == 0 and start == False:
                 real_size[b] = i + 1
                 start = True
             if start:
-                if if_reps[qs[b, i]] == True:
+                #if if_reps[qs[b, i]] == True:
+                if qs[b, i] == qs[b, i-1]:
                     tot_reps[b] += 1. / real_size[b]
-                if_reps[qs[b, i]] = True
+                #if_reps[qs[b, i]] = True
     return tot_reps
 
 def get_exist_rewards(batch, anses):
@@ -196,7 +198,8 @@ class BaseModel(object):
             tot_rewards = expert_entropys + (0)*learner_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp*0.1
         else:
             #tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards + 0.*discriminator_probs
-            tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
+            #tot_rewards = expert_entropys + (-4.0)*rep_rewards + 1.*exist_rewards - perp * 0.1
+            tot_rewards = rep_rewards
         advs = np.clip(tot_rewards - self.baseline, -0.5, 0.5)*2
         return tot_rewards, advs, expert_anses, perp
 
